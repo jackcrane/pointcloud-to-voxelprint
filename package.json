@@ -12,6 +12,7 @@
   "description": "",
   "dependencies": {
     "cli-progress": "^3.12.0",
-    "netcdfjs": "^3.0.0"
+    "netcdfjs": "^3.0.0",
+    "vdb-js": "^0.0.5"
   }
 }

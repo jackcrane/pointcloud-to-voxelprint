@@ -1,0 +1,8 @@
+ply
+format binary_little_endian 1.0
+comment Created in Blender version 4.5.3 LTS
+element vertex 0
+property float x
+property float y
+property float z
+end_header

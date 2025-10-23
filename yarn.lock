@@ -29,12 +29,24 @@ is-fullwidth-code-point@^3.0.0:
   resolved "https://registry.npmjs.org/is-fullwidth-code-point/-/is-fullwidth-code-point-3.0.0.tgz#f116f8064fe90b3f7844a38997c0b75051269f1d"
   integrity sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg==
 
+mnemonist@~0.34.0:
+  version "0.34.0"
+  resolved "https://registry.npmjs.org/mnemonist/-/mnemonist-0.34.0.tgz#94244ba4f8922ee25863d4624b3c6cccfd81b126"
+  integrity sha512-eKQxmumFOJhd7ea/u8zVvj7gA2tD6QFkuDfUIvoT/VIq+yR1VzXpp0tM8QFgeSRig5brIN/3NUE72/wvvyc9ug==
+  dependencies:
+    obliterator "^1.6.1"
+
 netcdfjs@^3.0.0:
   version "3.0.0"
   resolved "https://registry.npmjs.org/netcdfjs/-/netcdfjs-3.0.0.tgz#de14b6ea2135fe141b254e0d1600872f625f55ca"
   integrity sha512-LOvT8KkC308qtpUkcBPiCMBtii7ZQCN6LxcVheWgyUeZ6DQWcpSRFV9dcVXLj/2eHZ/bre9tV5HTH4Sf93vrFw==
   dependencies:
     iobuffer "^5.3.2"
+
+obliterator@^1.6.1:
+  version "1.6.1"
+  resolved "https://registry.npmjs.org/obliterator/-/obliterator-1.6.1.tgz#dea03e8ab821f6c4d96a299e17aef6a3af994ef3"
+  integrity sha512-9WXswnqINnnhOG/5SLimUlzuU1hFJUc8zkwyD59Sd+dPOMf05PmnYG/d6Q7HZ+KmgkZJa1PxRso6QdM3sTNHig==
 
 string-width@^4.2.3:
   version "4.2.3"
@@ -51,3 +63,16 @@ strip-ansi@^6.0.1:
   integrity sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==
   dependencies:
     ansi-regex "^5.0.1"
+
+tslib@~1.11.1:
+  version "1.11.2"
+  resolved "https://registry.npmjs.org/tslib/-/tslib-1.11.2.tgz#9c79d83272c9a7aaf166f73915c9667ecdde3cc9"
+  integrity sha512-tTSkux6IGPnUGUd1XAZHcpu85MOkIl5zX49pO+jfsie3eP0B6pyhOlLXm3cAC6T7s+euSDDUUV+Acop5WmtkVg==
+
+vdb-js@^0.0.5:
+  version "0.0.5"
+  resolved "https://registry.npmjs.org/vdb-js/-/vdb-js-0.0.5.tgz#ad026290f67e3b0e795941b0c670111299f9af58"
+  integrity sha512-COmjxpM3gEiW7DZMcxaPUVMSpWERk01nVrPSY1VocnI2ZLD2sIOzAht2jVzOu30GuL3XUyj2Ea9VFDDjOD1lEw==
+  dependencies:
+    mnemonist "~0.34.0"
+    tslib "~1.11.1"
