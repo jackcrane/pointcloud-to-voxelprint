@@ -1,6 +1,3 @@
-// ply.js — ES module (drop-in faster version)
-// Usage: const ply = new PLY("./model.ply");
-
 import { readFileSync } from "fs";
 import { Point3D } from "./Point3D.js";
 
@@ -85,7 +82,6 @@ export class PLY {
     this.#computeBounds();
 
     // ---- build balanced kd-tree for fast nearest queries
-    // store as a flat object tree to avoid function allocations during query
     this._kdRoot = buildKdTree(this.points);
   }
 
@@ -104,41 +100,103 @@ export class PLY {
   };
 
   /**
-   * Nearest point to (x,y,z) or a Point3D.
-   * @param {Point3D|[number,number,number]} target
-   * @param {{axes?: "x"|"y"|"z"|"xy"|"xz"|"yz"|"xyz", maxDistance?: number, excludeSelf?: boolean}} [opts]
-   * @returns {{point: Point3D, distance: number} | null}
+   * Nearest point to (x,y,z) or a Point3D with optional isotropic or anisotropic cutoff.
+   *
+   * Options:
+   * - axes: "x"|"y"|"z"|"xy"|"xz"|"yz"|"xyz"   (default "xyz")
+   * - maxDistance: number                      (isotropic radius in model units)
+   * - maxDistanceX/Y/Z: number                 (anisotropic radii per-axis in model units)
+   * - excludeSelf: boolean                     (default false)
+   *
+   * Behavior:
+   * - If maxDistanceX/Y/Z are provided (any of them), the search uses an
+   *   axis-aligned ellipsoidal metric: ((dx/sx)^2 + (dy/sy)^2 + (dz/sz)^2) <= 1.
+   * - Else if maxDistance is provided, uses a spherical cutoff of radius maxDistance.
+   * - If no cutoff is provided, returns the true nearest point (no rejection).
+   *
+   * Returns { point, distance } where distance is the Euclidean distance in model units.
    */
   nearestPoint = (target, opts = {}) => {
     const axesMask = maskFromAxes(opts.axes ?? "xyz");
-    const maxD = Number.isFinite(opts.maxDistance)
+
+    // --- choose metric scales (denominators) for anisotropic distance ---
+    const hasAniso =
+      Number.isFinite(opts.maxDistanceX) ||
+      Number.isFinite(opts.maxDistanceY) ||
+      Number.isFinite(opts.maxDistanceZ);
+
+    const sx = Number.isFinite(opts.maxDistanceX)
+      ? opts.maxDistanceX
+      : Number.isFinite(opts.maxDistance)
       ? opts.maxDistance
-      : Infinity;
+      : 1;
+
+    const sy = Number.isFinite(opts.maxDistanceY)
+      ? opts.maxDistanceY
+      : Number.isFinite(opts.maxDistance)
+      ? opts.maxDistance
+      : 1;
+
+    const sz = Number.isFinite(opts.maxDistanceZ)
+      ? opts.maxDistanceZ
+      : Number.isFinite(opts.maxDistance)
+      ? opts.maxDistance
+      : 1;
+
+    // If any cutoff (iso or aniso) provided, enable rejection at unit normalized radius.
+    const cutoffActive =
+      hasAniso || Number.isFinite(opts.maxDistance) ? true : false;
+
+    // normalized best distance^2 (ellipsoidal if aniso or iso provided; Euclidean if no cutoff)
+    let bestNd2 = cutoffActive ? 1 : Infinity;
+    let bestPoint = null;
+    let bestEuclidD2 = Infinity;
+
     const t = Array.isArray(target)
       ? { x: target[0], y: target[1], z: target[2] }
       : target;
 
     if (!this._kdRoot) return null;
 
-    let best = null,
-      bestD2 = maxD * maxD;
     const stack = [this._kdRoot];
+
+    const invSx = 1 / sx;
+    const invSy = 1 / sy;
+    const invSz = 1 / sz;
 
     while (stack.length) {
       const node = stack.pop();
       const p = node.p;
 
-      // squared distance
-      const dx = axesMask & 1 ? p.x - t.x : 0;
-      const dy = axesMask & 2 ? p.y - t.y : 0;
-      const dz = axesMask & 4 ? p.z - t.z : 0;
-      const d2 = dx * dx + dy * dy + dz * dz;
+      // Skip exact self if requested
+      if (opts.excludeSelf && p.x === t.x && p.y === t.y && p.z === t.z) {
+        // still traverse children
+      } else {
+        // Compute deltas respecting axesMask
+        const dx = axesMask & 1 ? p.x - t.x : 0;
+        const dy = axesMask & 2 ? p.y - t.y : 0;
+        const dz = axesMask & 4 ? p.z - t.z : 0;
 
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        best = p;
+        // Euclidean for reporting:
+        const d2e = dx * dx + dy * dy + dz * dz;
+
+        // Normalized metric for comparison (handles iso/aniso cutoffs uniformly)
+        const ndx = dx * invSx;
+        const ndy = dy * invSy;
+        const ndz = dz * invSz;
+        const d2n = ndx * ndx + ndy * ndy + ndz * ndz;
+
+        // If cutoff active, reject if outside unit ellipsoid
+        if (!cutoffActive || d2n <= 1) {
+          if (d2n < bestNd2 || (!cutoffActive && d2e < bestEuclidD2)) {
+            bestNd2 = cutoffActive ? d2n : d2n; // same variable, meaningful if !cutoffActive too
+            bestEuclidD2 = d2e;
+            bestPoint = p;
+          }
+        }
       }
 
+      // KD traversal / pruning
       const axisBit = 1 << node.axis;
       if (!(axesMask & axisBit)) {
         if (node.left) stack.push(node.left);
@@ -146,15 +204,41 @@ export class PLY {
         continue;
       }
 
+      // Signed difference along split axis
       const diff =
         node.axis === 0 ? t.x - p.x : node.axis === 1 ? t.y - p.y : t.z - p.z;
+
+      // Choose near/far children
       const near = diff < 0 ? node.left : node.right;
       const far = diff < 0 ? node.right : node.left;
+
       if (near) stack.push(near);
-      if (far && diff * diff < bestD2) stack.push(far);
+
+      // Prune far branch using normalized split-axis distance
+      if (far) {
+        // Scale diff by the corresponding axis scale for consistent pruning
+        const diffNorm =
+          node.axis === 0
+            ? diff * invSx
+            : node.axis === 1
+            ? diff * invSy
+            : diff * invSz;
+
+        // If no cutoff, we compare against current bestEuclidD2 using Euclidean lower bound on split:
+        if (!cutoffActive) {
+          // Lower bound if we crossed the splitting plane: diff^2 <= bestEuclidD2
+          if (diff * diff < bestEuclidD2) stack.push(far);
+        } else {
+          // With cutoffActive, use normalized bound vs bestNd2
+          if (diffNorm * diffNorm < bestNd2) stack.push(far);
+        }
+      }
     }
 
-    return best ? { point: best, distance: Math.sqrt(bestD2) } : null;
+    if (!bestPoint) return null;
+    if (cutoffActive && bestNd2 > 1) return null; // outside cutoff
+
+    return { point: bestPoint, distance: Math.sqrt(bestEuclidD2) };
   };
 
   getBounds = () => ({
@@ -190,14 +274,9 @@ export class PLY {
 
 /* ---------- kd-tree implementation (balanced median split) ---------- */
 
-/**
- * Node shape: { p: Point3D, axis: 0|1|2, left: Node|null, right: Node|null }
- * We build using an index array to avoid moving Point3D objects.
- */
 const buildKdTree = (points) => {
   if (points.length === 0) return null;
 
-  // Precompute an index array to select medians without copying point objects
   const idxs = new Array(points.length);
   for (let i = 0; i < points.length; i++) idxs[i] = i;
 
@@ -380,6 +459,3 @@ const maskFromAxes = (axes) => {
       return 1 | 2 | 4;
   }
 };
-
-// Small heap-allocated temp to avoid constructing Point3D for array targets
-const tempPoint3D = (x, y, z) => ({ x, y, z });

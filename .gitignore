@@ -6,3 +6,7 @@ nexrad
 out_color
 nexrad_color
 nexrad_bw
+air_traffic_out
+kstl_flights
+kstl_flights_21d
+kstl_flights_21d_c

@@ -19,7 +19,7 @@ const Y_IN = 1.5;
 const Z_IN = 0.75;
 
 // === Dot radius (inches) ===
-const VOXEL_RADIUS_INCHES = 0.003;
+const VOXEL_RADIUS_INCHES = 0.01;
 
 /** ---- main ---- */
 export const run = async () => {
@@ -125,7 +125,10 @@ export const run = async () => {
         const y = min.y + ((row + 0.5) / height) * ySize;
 
         const np = ply.nearestPoint([x, y, zWorld], {
-          maxDistance: VOXEL_RADIUS,
+          // maxDistance: VOXEL_RADIUS,
+          maxDistanceX: VOXEL_RADIUS * 4,
+          maxDistanceY: VOXEL_RADIUS * 4,
+          maxDistanceZ: VOXEL_RADIUS * 0.1,
         });
         if (!np) continue;
         const { point: p, distance: d } = np;
@@ -133,8 +136,8 @@ export const run = async () => {
         if (d > VOXEL_RADIUS) continue;
 
         // Enable color by uncommenting below line:
-        // image.setPixel(column, row, p.r, p.g, p.b);
-        image.setPixel(column, row, 1, 1, 1, 255);
+        image.setPixel(column, row, p.r, p.g, p.b);
+        // image.setPixel(column, row, 1, 1, 1, 255);
       }
     }
 
