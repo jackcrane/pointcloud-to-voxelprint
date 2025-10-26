@@ -126,8 +126,8 @@ export const run = async () => {
 
         const np = ply.nearestPoint([x, y, zWorld], {
           // maxDistance: VOXEL_RADIUS,
-          maxDistanceX: VOXEL_RADIUS * 4,
-          maxDistanceY: VOXEL_RADIUS * 4,
+          maxDistanceX: VOXEL_RADIUS * 1,
+          maxDistanceY: VOXEL_RADIUS * 1,
           maxDistanceZ: VOXEL_RADIUS * 0.1,
         });
         if (!np) continue;
