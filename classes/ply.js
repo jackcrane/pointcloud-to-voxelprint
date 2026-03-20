@@ -1,12 +1,18 @@
 import { readFileSync } from "fs";
 import { Point3D } from "./Point3D.js";
+import {
+  getVertexFieldIndices,
+  parseHeaderFromBuffer,
+  pickReader,
+  readColorFromParts,
+} from "../util/ply-format.js";
 
 /** Minimal PLY loader supporting ASCII and binary_little_endian vertex data (x,y,z + optional r,g,b,a) */
 export class PLY {
   /** @param {string} filePath */
   constructor(filePath) {
     const buf = readFileSync(filePath);
-    const { header, headerEndOffset } = parseHeader(buf);
+    const { header, headerEndOffset } = parseHeaderFromBuffer(buf);
     if (
       !header.format.startsWith("ascii") &&
       !header.format.startsWith("binary_little_endian")
@@ -18,23 +24,11 @@ export class PLY {
     }
 
     const props = header.vertex.properties; // array of {name,type}
-    const idx = {
-      x: props.findIndex((p) => p.name === "x"),
-      y: props.findIndex((p) => p.name === "y"),
-      z: props.findIndex((p) => p.name === "z"),
-    };
+    const idx = getVertexFieldIndices(props);
     if (idx.x < 0 || idx.y < 0 || idx.z < 0)
       throw new Error("PLY vertex must include x,y,z.");
 
-    // color properties may be r/g/b/a or red/green/blue/alpha
-    const cname = (a, b) =>
-      props.findIndex((p) => p.name === a || p.name === b);
-    const cidx = {
-      r: cname("red", "r"),
-      g: cname("green", "g"),
-      b: cname("blue", "b"),
-      a: cname("alpha", "a"),
-    };
+    const cidx = idx;
 
     const count = header.vertex.count;
     /** @type {Point3D[]} */
@@ -333,120 +327,6 @@ const buildKdTree = (points) => {
   };
 
   return build(0, points.length - 1, 0);
-};
-
-/* ---------- helpers ---------- */
-
-const parseHeader = (buf) => {
-  const txt = buf.toString("utf8");
-  const endIdx = txt.indexOf("end_header");
-  if (endIdx < 0) throw new Error("Invalid PLY: missing end_header.");
-
-  // Determine exact header byte length (consume the line that has end_header)
-  const after = txt.indexOf("\n", endIdx);
-  const headerEndOffset = Buffer.from(
-    txt.slice(0, after < 0 ? endIdx + "end_header".length : after + 1),
-    "utf8",
-  ).length;
-
-  const headerLines = txt.slice(0, after < 0 ? endIdx : after).split(/\r?\n/);
-
-  if (!/^ply\s*$/i.test(headerLines[0])) throw new Error("Not a PLY file.");
-  const formatLine = headerLines.find((l) => l.startsWith("format "));
-  if (!formatLine) throw new Error("Missing format line.");
-  const format = formatLine.split(/\s+/).slice(1, 3).join(" ");
-
-  // Parse elements/properties (only care about "vertex")
-  const header = { format, vertex: null };
-  let i = 0;
-  while (i < headerLines.length) {
-    const line = headerLines[i].trim();
-    if (line.startsWith("element ")) {
-      const [, name, countStr] = line.split(/\s+/);
-      const count = parseInt(countStr, 10);
-      if (name === "vertex") {
-        i++;
-        const properties = [];
-        while (
-          i < headerLines.length &&
-          headerLines[i].trim().startsWith("property ")
-        ) {
-          const parts = headerLines[i].trim().split(/\s+/).slice(1); // after "property"
-          if (parts[0] === "list") {
-            i++;
-            continue; // skip lists
-          }
-          const [type, name2] = parts;
-          properties.push({ name: name2, type });
-          i++;
-        }
-        header.vertex = { count, properties };
-        continue;
-      }
-    }
-    i++;
-  }
-  return { header, headerEndOffset };
-};
-
-const pickReader = (type) => {
-  // PLY numeric types → size & DataView reader
-  switch (type) {
-    case "float":
-    case "float32":
-      return { size: 4, read: (dv, off) => dv.getFloat32(off, true) };
-    case "double":
-    case "float64":
-      return { size: 8, read: (dv, off) => dv.getFloat64(off, true) };
-    case "uchar":
-    case "uint8":
-      return { size: 1, read: (dv, off) => dv.getUint8(off) };
-    case "char":
-    case "int8":
-      return { size: 1, read: (dv, off) => dv.getInt8(off) };
-    case "ushort":
-    case "uint16":
-      return { size: 2, read: (dv, off) => dv.getUint16(off, true) };
-    case "short":
-    case "int16":
-      return { size: 2, read: (dv, off) => dv.getInt16(off, true) };
-    case "uint":
-    case "uint32":
-      return { size: 4, read: (dv, off) => dv.getUint32(off, true) };
-    case "int":
-    case "int32":
-      return { size: 4, read: (dv, off) => dv.getInt32(off, true) };
-    default:
-      // Fallback as 32-bit float
-      return { size: 4, read: (dv, off) => dv.getFloat32(off, true) };
-  }
-};
-
-const readColorFromParts = (parts, cidx) => {
-  const haveRGB =
-    cidx.r >= 0 &&
-    cidx.g >= 0 &&
-    cidx.b >= 0 &&
-    parts[cidx.r] != null &&
-    parts[cidx.g] != null &&
-    parts[cidx.b] != null;
-
-  if (!haveRGB) return null;
-
-  const to255 = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return null;
-    // Heuristic: if <=1, assume normalized float; else 0–255 byte
-    if (n <= 1 && n >= 0) return Math.round(n * 255);
-    return Math.max(0, Math.min(255, Math.round(n)));
-  };
-
-  const r = to255(parts[cidx.r]);
-  const g = to255(parts[cidx.g]);
-  const b = to255(parts[cidx.b]);
-  const a = cidx.a >= 0 && parts[cidx.a] != null ? to255(parts[cidx.a]) : null;
-
-  return { r, g, b, a };
 };
 
 // Convert axes string to bitmask: x=1, y=2, z=4
