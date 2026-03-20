@@ -42,8 +42,18 @@ export class PLY {
 
     if (header.format.startsWith("ascii")) {
       const text = buf.slice(headerEndOffset).toString("utf8");
-      const lines = text.trim().split(/\r?\n/);
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length && !l.startsWith("comment"));
+
       for (let i = 0; i < count; i++) {
+        if (!lines[i]) {
+          throw new Error(
+            `PLY ASCII parse error: expected ${count} vertices, got ${lines.length}`,
+          );
+        }
+
         const parts = lines[i].trim().split(/\s+/);
         const x = parseFloat(parts[idx.x]);
         const y = parseFloat(parts[idx.y]);
@@ -128,20 +138,20 @@ export class PLY {
     const sx = Number.isFinite(opts.maxDistanceX)
       ? opts.maxDistanceX
       : Number.isFinite(opts.maxDistance)
-      ? opts.maxDistance
-      : 1;
+        ? opts.maxDistance
+        : 1;
 
     const sy = Number.isFinite(opts.maxDistanceY)
       ? opts.maxDistanceY
       : Number.isFinite(opts.maxDistance)
-      ? opts.maxDistance
-      : 1;
+        ? opts.maxDistance
+        : 1;
 
     const sz = Number.isFinite(opts.maxDistanceZ)
       ? opts.maxDistanceZ
       : Number.isFinite(opts.maxDistance)
-      ? opts.maxDistance
-      : 1;
+        ? opts.maxDistance
+        : 1;
 
     // If any cutoff (iso or aniso) provided, enable rejection at unit normalized radius.
     const cutoffActive =
@@ -221,8 +231,8 @@ export class PLY {
           node.axis === 0
             ? diff * invSx
             : node.axis === 1
-            ? diff * invSy
-            : diff * invSz;
+              ? diff * invSy
+              : diff * invSz;
 
         // If no cutoff, we compare against current bestEuclidD2 using Euclidean lower bound on split:
         if (!cutoffActive) {
@@ -336,7 +346,7 @@ const parseHeader = (buf) => {
   const after = txt.indexOf("\n", endIdx);
   const headerEndOffset = Buffer.from(
     txt.slice(0, after < 0 ? endIdx + "end_header".length : after + 1),
-    "utf8"
+    "utf8",
   ).length;
 
   const headerLines = txt.slice(0, after < 0 ? endIdx : after).split(/\r?\n/);

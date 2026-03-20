@@ -79,6 +79,7 @@ export class PNG {
   };
 
   getPixel = (x, y) => {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
     const i = y * this.stride + (x << 2);
     return [
       this.pixels[i],
@@ -89,6 +90,7 @@ export class PNG {
   };
 
   setPixel = (x, y, r, g, b, a = 255) => {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
     const i = y * this.stride + (x << 2);
     this.pixels[i] = r | 0;
     this.pixels[i + 1] = g | 0;

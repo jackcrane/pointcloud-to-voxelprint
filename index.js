@@ -13,13 +13,17 @@ const DPI = 300; // dots per inch for X/Y
 const LAYER_HEIGHT_NM = 27_000; // Z slice height
 const NM_PER_INCH = 25_400_000; // exact
 
+const multiplier = 1;
 // === Physical build size (inches) ===
-const X_IN = 1.5;
-const Y_IN = 1.5;
-const Z_IN = 0.75;
+const X_IN = 1.5 * multiplier;
+const Y_IN = 1.5 * multiplier;
+const Z_IN = 0.75 * multiplier;
+// const X_IN = 3.85 / 2;
+// const Y_IN = 3.34 / 2;
+// const Z_IN = 7.74 / 2;
 
 // === Dot radius (inches) ===
-const VOXEL_RADIUS_INCHES = 0.01;
+const VOXEL_RADIUS_INCHES = 0.008 * multiplier;
 
 /** ---- main ---- */
 export const run = async () => {
@@ -75,10 +79,10 @@ export const run = async () => {
   const depth = Math.max(1, Math.round((zIn * NM_PER_INCH) / LAYER_HEIGHT_NM));
 
   console.log(
-    `Physical (in): ${xIn.toFixed(3)} x ${yIn.toFixed(3)} x ${zIn.toFixed(3)}`
+    `Physical (in): ${xIn.toFixed(3)} x ${yIn.toFixed(3)} x ${zIn.toFixed(3)}`,
   );
   console.log(
-    `Pixels/Layers: ${width} x ${height} x ${depth}  @ ${DPI} dpi, ${LAYER_HEIGHT_NM} nm`
+    `Pixels/Layers: ${width} x ${height} x ${depth}  @ ${DPI} dpi, ${LAYER_HEIGHT_NM} nm`,
   );
 
   const MODEL_UNITS_PER_INCH_X = xSize / xIn;
@@ -91,8 +95,8 @@ export const run = async () => {
   const VOXEL_RADIUS = VOXEL_RADIUS_INCHES * MODEL_UNITS_PER_INCH;
   console.log(
     `Voxel radius: ${VOXEL_RADIUS_INCHES.toFixed(
-      4
-    )} in  →  ${VOXEL_RADIUS.toFixed(2)} model units`
+      4,
+    )} in  →  ${VOXEL_RADIUS.toFixed(2)} model units`,
   );
 
   const layerBar = new SingleBar(
@@ -101,21 +105,24 @@ export const run = async () => {
         "Slicing |{bar}| {percentage}% | {value}/{total} layers | ETA {eta_formatted}",
       hideCursor: true,
     },
-    Presets.shades_classic
+    Presets.shades_classic,
   );
   layerBar.start(depth, 0);
 
   const image = new PNG(width, height);
 
+  const layerThickness = zSize / depth;
+
   for (let z = 0; z < depth; z++) {
-    const zWorld = min.z + ((z + 0.5) / depth) * zSize;
+    // const zWorld = min.z + ((z + 0.5) / depth) * zSize;
+    const zWorld = min.z + z * layerThickness;
     image.floodFillFrom(
       Math.floor(width / 2),
       Math.floor(height / 2),
       247,
       247,
       247,
-      128
+      128,
     );
 
     for (let column = 0; column < width; column++) {
@@ -128,7 +135,9 @@ export const run = async () => {
           // maxDistance: VOXEL_RADIUS,
           maxDistanceX: VOXEL_RADIUS * 1,
           maxDistanceY: VOXEL_RADIUS * 1,
-          maxDistanceZ: VOXEL_RADIUS * 0.1,
+          maxDistanceZ: VOXEL_RADIUS,
+          // maxDistanceZ: (zSize / depth) * 0.5,
+          // maxDistanceZ: layerThickness,
         });
         if (!np) continue;
         const { point: p, distance: d } = np;
@@ -136,7 +145,12 @@ export const run = async () => {
         if (d > VOXEL_RADIUS) continue;
 
         // Enable color by uncommenting below line:
-        image.setPixel(column, row, p.r, p.g, p.b);
+        const alpha = Math.min(
+          255 - (Number.isFinite(p.a) ? p.a : 1) * 0.5,
+          200,
+        );
+
+        image.setPixel(column, row, p.r, p.g, p.b, alpha);
         // image.setPixel(column, row, 1, 1, 1, 255);
       }
     }
