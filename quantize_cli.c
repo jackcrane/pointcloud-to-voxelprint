@@ -15,7 +15,8 @@ static const char *const STAGE_NAMES[] = {
 static void print_usage(const char *program_name) {
   fprintf(
       stderr,
-      "Usage: %s [--log-interval N] [--steps bounds[,shard[,reduce[,write]]]] "
+      "Usage: %s [--log-interval N] [--temp-dir DIR] "
+      "[--steps bounds[,shard[,reduce[,write]]]] "
       "<input.ply> <output.ply>\n",
       program_name);
 }
@@ -78,6 +79,28 @@ int parse_quantize_options(int argc, char **argv, QuantizeOptions *options_out) 
         print_usage(argv[0]);
         return -1;
       }
+      continue;
+    }
+
+    if (strcmp(arg, "--temp-dir") == 0) {
+      if (i + 1 >= argc || argv[i + 1][0] == '\0') {
+        fprintf(stderr, "Invalid value for --temp-dir.\n");
+        print_usage(argv[0]);
+        return -1;
+      }
+      options.temp_dir_path = argv[i + 1];
+      i++;
+      continue;
+    }
+
+    if (starts_with(arg, "--temp-dir=")) {
+      const char *value = arg + strlen("--temp-dir=");
+      if (value[0] == '\0') {
+        fprintf(stderr, "Invalid value for --temp-dir.\n");
+        print_usage(argv[0]);
+        return -1;
+      }
+      options.temp_dir_path = value;
       continue;
     }
 

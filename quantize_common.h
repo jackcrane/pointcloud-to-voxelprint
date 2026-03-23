@@ -114,6 +114,7 @@ enum {
 typedef struct {
   const char *input_path;
   const char *output_path;
+  const char *temp_dir_path;
   uint64_t log_interval;
   unsigned stage_mask;
 } QuantizeOptions;

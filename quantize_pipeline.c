@@ -716,6 +716,30 @@ static void cleanup_temp_paths(TempPaths *temp_paths) {
   temp_paths->temp_dir = NULL;
 }
 
+static int ensure_directory_exists(const char *dir_path) {
+  struct stat stat_buf;
+  if (stat(dir_path, &stat_buf) == 0) {
+    if (!S_ISDIR(stat_buf.st_mode)) {
+      fprintf(stderr, "Temp path exists but is not a directory: %s\n", dir_path);
+      return -1;
+    }
+    return 0;
+  }
+  if (errno != ENOENT) {
+    fprintf(stderr, "Failed to stat temp directory '%s': %s\n", dir_path, strerror(errno));
+    return -1;
+  }
+
+  if (ensure_parent_dir(dir_path) != 0) {
+    return -1;
+  }
+  if (mkdir(dir_path, 0700) != 0 && errno != EEXIST) {
+    fprintf(stderr, "Failed to create temp directory '%s': %s\n", dir_path, strerror(errno));
+    return -1;
+  }
+  return 0;
+}
+
 static int init_temp_paths(TempPaths *temp_paths) {
   memset(temp_paths, 0, sizeof(*temp_paths));
 
@@ -753,6 +777,50 @@ static int init_temp_paths(TempPaths *temp_paths) {
   }
 
   temp_paths->temp_dir = strdup(temp_template);
+  if (temp_paths->temp_dir == NULL) {
+    fprintf(stderr, "Failed to allocate temp directory path.\n");
+    cleanup_temp_paths(temp_paths);
+    return -1;
+  }
+
+  for (int i = 0; i < SHARD_COUNT; ++i) {
+    char shard_name[32];
+    snprintf(shard_name, sizeof(shard_name), "shard-%03d.bin", i);
+    temp_paths->shard_paths[i] = dup_path_join(temp_paths->temp_dir, shard_name);
+    if (temp_paths->shard_paths[i] == NULL) {
+      fprintf(stderr, "Failed to allocate shard path.\n");
+      cleanup_temp_paths(temp_paths);
+      return -1;
+    }
+
+    if (buffered_writer_open(
+            &temp_paths->shard_writers[i],
+            temp_paths->shard_paths[i],
+            SHARD_TEXT_RECORD_ESTIMATE) != 0) {
+      cleanup_temp_paths(temp_paths);
+      return -1;
+    }
+  }
+
+  temp_paths->output_data_path = dup_path_join(temp_paths->temp_dir, "quantized-vertices.bin");
+  if (temp_paths->output_data_path == NULL) {
+    fprintf(stderr, "Failed to allocate staged output path.\n");
+    cleanup_temp_paths(temp_paths);
+    return -1;
+  }
+
+  temp_paths->shard_writers_open = true;
+  return 0;
+}
+
+static int init_temp_paths_with_base(TempPaths *temp_paths, const char *base_dir) {
+  memset(temp_paths, 0, sizeof(*temp_paths));
+
+  if (ensure_directory_exists(base_dir) != 0) {
+    return -1;
+  }
+
+  temp_paths->temp_dir = strdup(base_dir);
   if (temp_paths->temp_dir == NULL) {
     fprintf(stderr, "Failed to allocate temp directory path.\n");
     cleanup_temp_paths(temp_paths);
@@ -1083,7 +1151,9 @@ int run_quantize(const QuantizeOptions *options) {
   }
 
   run.scaler = build_scaler(&run.bounds, build_default_grid());
-  if (init_temp_paths(&run.temp_paths) != 0) {
+  if ((run.options.temp_dir_path != NULL
+           ? init_temp_paths_with_base(&run.temp_paths, run.options.temp_dir_path)
+           : init_temp_paths(&run.temp_paths)) != 0) {
     goto cleanup;
   }
   if (shard_vertices(&run) != 0) {
