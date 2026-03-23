@@ -31,6 +31,7 @@ enum {
 };
 
 static const uint64_t ESTIMATE_POINT_COUNT = 1239896640ULL;
+static const uint64_t DEFAULT_LOG_INTERVAL = 10000000ULL;
 
 typedef enum {
   PLY_FORMAT_ASCII = 0,
@@ -162,6 +163,14 @@ typedef struct {
   bool shard_writers_open;
 } TempPaths;
 
+typedef struct {
+  const char *label;
+  uint64_t total;
+  uint64_t interval;
+  uint64_t next_log;
+  double started_at;
+} ProgressLogger;
+
 typedef int (*VertexVisitor)(const Vertex *vertex, void *ctx);
 
 static void free_ply_header(PlyHeader *header);
@@ -171,28 +180,33 @@ static int for_each_vertex(
     const PlyHeader *header,
     VertexVisitor visitor,
     void *ctx,
+    ProgressLogger *progress,
     uint64_t *processed_out);
 static int stream_ascii_vertices(
     const char *file_path,
     const PlyHeader *header,
     VertexVisitor visitor,
     void *ctx,
+    ProgressLogger *progress,
     uint64_t *processed_out);
 static int stream_binary_vertices(
     const char *file_path,
     const PlyHeader *header,
     VertexVisitor visitor,
     void *ctx,
+    ProgressLogger *progress,
     uint64_t *processed_out);
 static int write_empty_ply(const char *output_path);
 static int write_final_ply(
     const char *vertex_data_path,
     const char *output_path,
-    uint64_t point_count);
+    uint64_t point_count,
+    ProgressLogger *progress);
 static int reduce_shard(
     const char *shard_path,
     const Scaler *scaler,
     BufferedWriter *output_writer,
+    ProgressLogger *progress,
     uint64_t *output_point_count);
 static int ensure_parent_dir(const char *path);
 static void cleanup_temp_paths(TempPaths *temp_paths);
@@ -201,6 +215,71 @@ static double now_seconds(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static const char *format_duration(double total_seconds, char *buffer, size_t buffer_size);
+
+static void progress_logger_init(
+    ProgressLogger *progress,
+    const char *label,
+    uint64_t total,
+    uint64_t interval,
+    double started_at) {
+  if (progress == NULL) {
+    return;
+  }
+
+  progress->label = label;
+  progress->total = total;
+  progress->interval = interval;
+  progress->next_log = interval > 0 ? interval : UINT64_MAX;
+  progress->started_at = started_at;
+}
+
+static void progress_logger_maybe_log(ProgressLogger *progress, uint64_t processed) {
+  if (progress == NULL || progress->interval == 0 || processed < progress->next_log) {
+    return;
+  }
+
+  char elapsed[64];
+  double elapsed_seconds = now_seconds() - progress->started_at;
+
+  if (progress->total > 0) {
+    double percent = ((double)processed * 100.0) / (double)progress->total;
+    char eta[64];
+    const char *eta_text = "n/a";
+    if (processed > 0 && processed < progress->total) {
+      double seconds_per_record = elapsed_seconds / (double)processed;
+      double eta_seconds = seconds_per_record * (double)(progress->total - processed);
+      eta_text = format_duration(eta_seconds, eta, sizeof(eta));
+    } else if (processed >= progress->total) {
+      eta_text = format_duration(0.0, eta, sizeof(eta));
+    }
+    printf(
+        "%s progress: %" PRIu64 "/%" PRIu64 " (%.2f%%, elapsed %s, estimated remaining %s)\n",
+        progress->label,
+        processed,
+        progress->total,
+        percent,
+        format_duration(elapsed_seconds, elapsed, sizeof(elapsed)),
+        eta_text);
+  } else {
+    printf(
+        "%s progress: %" PRIu64 " records (elapsed %s)\n",
+        progress->label,
+        processed,
+        format_duration(elapsed_seconds, elapsed, sizeof(elapsed)));
+  }
+
+  fflush(stdout);
+
+  while (progress->next_log <= processed) {
+    if (UINT64_MAX - progress->next_log < progress->interval) {
+      progress->next_log = UINT64_MAX;
+      break;
+    }
+    progress->next_log += progress->interval;
+  }
 }
 
 static char *trim_in_place(char *text) {
@@ -809,6 +888,7 @@ static int stream_ascii_vertices(
     const PlyHeader *header,
     VertexVisitor visitor,
     void *ctx,
+    ProgressLogger *progress,
     uint64_t *processed_out) {
   AsciiFieldIndices indices = build_ascii_indices(header);
   if (indices.x < 0 || indices.y < 0 || indices.z < 0) {
@@ -848,6 +928,7 @@ static int stream_ascii_vertices(
       break;
     }
     processed++;
+    progress_logger_maybe_log(progress, processed);
   }
 
   free(line);
@@ -861,6 +942,7 @@ static int stream_binary_vertices(
     const PlyHeader *header,
     VertexVisitor visitor,
     void *ctx,
+    ProgressLogger *progress,
     uint64_t *processed_out) {
   BinaryLayout layout = build_binary_layout(header);
   if (!layout.x.present || !layout.y.present || !layout.z.present) {
@@ -941,6 +1023,7 @@ static int stream_binary_vertices(
         break;
       }
       processed++;
+      progress_logger_maybe_log(progress, processed);
     }
 
     if (rc != 0) {
@@ -973,11 +1056,12 @@ static int for_each_vertex(
     const PlyHeader *header,
     VertexVisitor visitor,
     void *ctx,
+    ProgressLogger *progress,
     uint64_t *processed_out) {
   if (header->format == PLY_FORMAT_ASCII) {
-    return stream_ascii_vertices(file_path, header, visitor, ctx, processed_out);
+    return stream_ascii_vertices(file_path, header, visitor, ctx, progress, processed_out);
   }
-  return stream_binary_vertices(file_path, header, visitor, ctx, processed_out);
+  return stream_binary_vertices(file_path, header, visitor, ctx, progress, processed_out);
 }
 
 static uint32_t pack_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -1214,6 +1298,7 @@ static int reduce_shard(
     const char *shard_path,
     const Scaler *scaler,
     BufferedWriter *output_writer,
+    ProgressLogger *progress,
     uint64_t *output_point_count) {
   struct stat stat_buf;
   if (stat(shard_path, &stat_buf) != 0) {
@@ -1259,6 +1344,7 @@ static int reduce_shard(
     }
     records[i].cell_id = read_u64_le(raw);
     records[i].color = read_u32_le(raw + 8);
+    progress_logger_maybe_log(progress, i + 1);
   }
 
   fclose(fp);
@@ -1354,7 +1440,8 @@ static int write_empty_ply(const char *output_path) {
 static int write_final_ply(
     const char *vertex_data_path,
     const char *output_path,
-    uint64_t point_count) {
+    uint64_t point_count,
+    ProgressLogger *progress) {
   FILE *output = fopen(output_path, "wb");
   if (output == NULL) {
     fprintf(stderr, "Failed to open '%s' for writing: %s\n", output_path, strerror(errno));
@@ -1453,6 +1540,8 @@ static int write_final_ply(
       rc = -1;
       break;
     }
+
+    progress_logger_maybe_log(progress, i + 1);
   }
 
   fclose(input);
@@ -1632,13 +1721,49 @@ static int close_shard_writers(TempPaths *temp_paths) {
 int main(int argc, char **argv) {
   const double total_started_at = now_seconds();
 
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s <input.ply> <output.ply>\n", argv[0]);
-    return 1;
+  uint64_t log_interval = DEFAULT_LOG_INTERVAL;
+  const char *input_path = NULL;
+  const char *output_path = NULL;
+
+  for (int i = 1; i < argc; ++i) {
+    const char *arg = argv[i];
+    if (strcmp(arg, "--log-interval") == 0) {
+      if (i + 1 >= argc || !parse_uint64_str(argv[i + 1], &log_interval)) {
+        fprintf(stderr, "Invalid value for --log-interval.\n");
+        return 1;
+      }
+      i++;
+      continue;
+    }
+
+    if (starts_with(arg, "--log-interval=")) {
+      if (!parse_uint64_str(arg + strlen("--log-interval="), &log_interval)) {
+        fprintf(stderr, "Invalid value for --log-interval.\n");
+        return 1;
+      }
+      continue;
+    }
+
+    if (arg[0] == '-') {
+      fprintf(stderr, "Unknown option: %s\n", arg);
+      fprintf(stderr, "Usage: %s [--log-interval N] <input.ply> <output.ply>\n", argv[0]);
+      return 1;
+    }
+
+    if (input_path == NULL) {
+      input_path = arg;
+    } else if (output_path == NULL) {
+      output_path = arg;
+    } else {
+      fprintf(stderr, "Usage: %s [--log-interval N] <input.ply> <output.ply>\n", argv[0]);
+      return 1;
+    }
   }
 
-  const char *input_path = argv[1];
-  const char *output_path = argv[2];
+  if (input_path == NULL || output_path == NULL) {
+    fprintf(stderr, "Usage: %s [--log-interval N] <input.ply> <output.ply>\n", argv[0]);
+    return 1;
+  }
   if (strcmp(input_path, output_path) == 0) {
     fprintf(stderr, "Input and output paths must be different.\n");
     return 1;
@@ -1679,7 +1804,20 @@ int main(int argc, char **argv) {
   BoundsScanContext bounds_ctx = {&bounds};
   uint64_t bounds_point_count = 0;
   double bounds_started_at = now_seconds();
-  if (for_each_vertex(input_path, &header, bounds_scan_visitor, &bounds_ctx, &bounds_point_count) != 0) {
+  ProgressLogger bounds_progress;
+  progress_logger_init(
+      &bounds_progress,
+      "Bounds scan",
+      header.vertex_count,
+      log_interval,
+      bounds_started_at);
+  if (for_each_vertex(
+          input_path,
+          &header,
+          bounds_scan_visitor,
+          &bounds_ctx,
+          &bounds_progress,
+          &bounds_point_count) != 0) {
     free_ply_header(&header);
     return 1;
   }
@@ -1712,12 +1850,25 @@ int main(int argc, char **argv) {
 
   uint64_t shard_pass_point_count = 0;
   double shard_started_at = now_seconds();
+  ProgressLogger shard_progress;
+  progress_logger_init(
+      &shard_progress,
+      "Shard points",
+      header.vertex_count,
+      log_interval,
+      shard_started_at);
   ShardPassContext shard_ctx = {
       .scaler = &scaler,
       .writers = temp_paths.shard_writers,
       .sharded_point_count = 0,
   };
-  if (for_each_vertex(input_path, &header, shard_pass_visitor, &shard_ctx, &shard_pass_point_count) != 0) {
+  if (for_each_vertex(
+          input_path,
+          &header,
+          shard_pass_visitor,
+          &shard_ctx,
+          &shard_progress,
+          &shard_pass_point_count) != 0) {
     cleanup_temp_paths(&temp_paths);
     free_ply_header(&header);
     return 1;
@@ -1755,8 +1906,20 @@ int main(int argc, char **argv) {
 
   uint64_t output_point_count = 0;
   double reduce_started_at = now_seconds();
+  ProgressLogger reduce_progress;
+  progress_logger_init(
+      &reduce_progress,
+      "Reduce shards",
+      shard_ctx.sharded_point_count,
+      log_interval,
+      reduce_started_at);
   for (int i = 0; i < SHARD_COUNT; ++i) {
-    if (reduce_shard(temp_paths.shard_paths[i], &scaler, &output_writer, &output_point_count) != 0) {
+    if (reduce_shard(
+            temp_paths.shard_paths[i],
+            &scaler,
+            &output_writer,
+            &reduce_progress,
+            &output_point_count) != 0) {
       buffered_writer_close(&output_writer);
       cleanup_temp_paths(&temp_paths);
       free_ply_header(&header);
@@ -1791,7 +1954,18 @@ int main(int argc, char **argv) {
   }
 
   double write_started_at = now_seconds();
-  if (write_final_ply(temp_paths.output_data_path, output_path, output_point_count) != 0) {
+  ProgressLogger write_progress;
+  progress_logger_init(
+      &write_progress,
+      "Write output",
+      output_point_count,
+      log_interval,
+      write_started_at);
+  if (write_final_ply(
+          temp_paths.output_data_path,
+          output_path,
+          output_point_count,
+          &write_progress) != 0) {
     cleanup_temp_paths(&temp_paths);
     free_ply_header(&header);
     return 1;

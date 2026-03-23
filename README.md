@@ -171,13 +171,13 @@ make quantize
 Command:
 
 ```bash
-./quantize <input.ply> <output.ply>
+./quantize [--log-interval 10000000] <input.ply> <output.ply>
 ```
 
 Example:
 
 ```bash
-./quantize data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./quantize --log-interval 10000000 data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
 ```
 
 What [`quantize.c`](./quantize.c) does:
@@ -198,6 +198,7 @@ Important behaviors:
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
+- periodic progress logs are emitted every `10,000,000` records by default; use `--log-interval N` to change that or `--log-interval 0` to disable them
 
 Current implementation characteristics:
 
