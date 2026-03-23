@@ -13,9 +13,9 @@ import {
 
 const { SingleBar, Presets } = cliProgress;
 
-const SIZE_X_IN = 0.5;
-const SIZE_Y_IN = 0.5;
-const SIZE_Z_IN = 0.25;
+const SIZE_X_IN = 10;
+const SIZE_Y_IN = 10;
+const SIZE_Z_IN = 4;
 
 const DPI_X = 300;
 const DPI_Y = 300;
@@ -27,10 +27,12 @@ const OUTPUT_RECORD_BYTES = 16;
 const SHARD_BUFFER_BYTES = 1024 * 1024;
 const STREAM_CHUNK_BYTES = 1024 * 1024;
 const PROGRESS_BATCH = 50_000;
+const ESTIMATE_POINT_COUNT = 1_239_896_640;
 
 const DEFAULT_COLOR = Object.freeze({ r: 255, g: 255, b: 255, a: 255 });
 
 const run = async () => {
+  const startedAtNs = process.hrtime.bigint();
   const [inputPathArg, outputPathArg] = process.argv.slice(2);
   if (!inputPathArg || !outputPathArg) {
     console.error("Usage: node quantize.js <input.ply> <output.ply>");
@@ -49,7 +51,7 @@ const run = async () => {
 
   const headerInfo = await readPlyHeader(inputPath);
   const { header } = headerInfo;
-  const vertexCount = header.vertex?.count ?? 0;
+  const declaredVertexCount = header.vertex?.count ?? 0;
 
   if (
     !header.format.startsWith("ascii") &&
@@ -62,9 +64,10 @@ const run = async () => {
     throw new Error("PLY has no vertex element.");
   }
 
-  if (vertexCount === 0) {
+  if (declaredVertexCount === 0) {
     await writeEmptyPly(outputPath);
     console.log("Input has no vertices. Wrote an empty quantized PLY.");
+    printTimingSummary(startedAtNs, 0, declaredVertexCount);
     return;
   }
 
@@ -77,7 +80,7 @@ const run = async () => {
     maxZ: -Infinity,
   };
 
-  await forEachVertex(
+  const boundsPointCount = await forEachVertex(
     inputPath,
     headerInfo,
     ({ x, y, z }) => {
@@ -99,6 +102,7 @@ const run = async () => {
     console.log(
       "Input had no valid numeric vertices. Wrote an empty quantized PLY.",
     );
+    printTimingSummary(startedAtNs, boundsPointCount, declaredVertexCount);
     return;
   }
 
@@ -125,7 +129,7 @@ const run = async () => {
 
     let shardedPointCount = 0;
 
-    await forEachVertex(
+    const shardPassPointCount = await forEachVertex(
       inputPath,
       headerInfo,
       async ({ x, y, z, color }) => {
@@ -152,10 +156,20 @@ const run = async () => {
 
     await Promise.all(shardWriters.map((writer) => writer.close()));
 
+    const actualInputPointCount = Math.min(
+      boundsPointCount,
+      shardPassPointCount,
+    );
+
     if (shardedPointCount === 0) {
       await writeEmptyPly(outputPath);
       console.log(
         "Input had no valid numeric vertices to quantize. Wrote an empty PLY.",
+      );
+      printTimingSummary(
+        startedAtNs,
+        actualInputPointCount,
+        declaredVertexCount,
       );
       return;
     }
@@ -216,9 +230,14 @@ const run = async () => {
 
     console.log(
       [
-        `Quantized ${vertexCount} input points into ${outputPointCount} output points.`,
+        `Quantized ${actualInputPointCount} input points into ${outputPointCount} output points.`,
         `Target size: ${SIZE_X_IN}" x ${SIZE_Y_IN}" x ${SIZE_Z_IN}"`,
         `Target DPI: ${DPI_X} x ${DPI_Y} x ${DPI_Z}`,
+        ...buildTimingSummaryLines(
+          startedAtNs,
+          actualInputPointCount,
+          declaredVertexCount,
+        ),
       ].join("\n"),
     );
   } finally {
@@ -285,7 +304,7 @@ const forEachVertex = async (filePath, headerInfo, onVertex, { label }) => {
     await streamBinaryVertices(filePath, headerInfo, onParsedVertex);
   }
 
-  bar.update(total);
+  bar.update(processed);
   bar.stop();
   return processed;
 };
@@ -342,11 +361,7 @@ const streamAsciiVertices = async (filePath, headerInfo, onVertex) => {
     processed++;
   }
 
-  if (processed !== total) {
-    throw new Error(
-      `PLY ASCII parse error: expected ${total} vertices, got ${processed}`,
-    );
-  }
+  return processed;
 };
 
 const streamBinaryVertices = async (filePath, headerInfo, onVertex) => {
@@ -380,21 +395,25 @@ const streamBinaryVertices = async (filePath, headerInfo, onVertex) => {
         r: layout.r
           ? normalizeColorValue(
               layout.r.reader.read(dv, offset + layout.r.offset),
+              layout.r.type,
             )
           : DEFAULT_COLOR.r,
         g: layout.g
           ? normalizeColorValue(
               layout.g.reader.read(dv, offset + layout.g.offset),
+              layout.g.type,
             )
           : DEFAULT_COLOR.g,
         b: layout.b
           ? normalizeColorValue(
               layout.b.reader.read(dv, offset + layout.b.offset),
+              layout.b.type,
             )
           : DEFAULT_COLOR.b,
         a: layout.a
           ? normalizeColorValue(
               layout.a.reader.read(dv, offset + layout.a.offset),
+              layout.a.type,
             )
           : DEFAULT_COLOR.a,
       });
@@ -431,7 +450,7 @@ const buildBinaryLayout = (properties) => {
   let offset = 0;
   for (const property of properties) {
     const reader = pickReader(property.type);
-    const entry = { offset, reader };
+    const entry = { offset, reader, type: property.type };
     switch (property.name) {
       case "x":
         layout.x = entry;
@@ -565,7 +584,7 @@ const readShardRecords = async (shardPath, onRecord) => {
 const writeEmptyPly = async (outputPath) => {
   const header =
     "ply\n" +
-    "format binary_little_endian 1.0\n" +
+    "format ascii 1.0\n" +
     "element vertex 0\n" +
     "property float x\n" +
     "property float y\n" +
@@ -581,7 +600,7 @@ const writeEmptyPly = async (outputPath) => {
 const writeFinalPly = async (vertexDataPath, outputPath, pointCount) => {
   const header =
     "ply\n" +
-    "format binary_little_endian 1.0\n" +
+    "format ascii 1.0\n" +
     `element vertex ${pointCount}\n` +
     "property float x\n" +
     "property float y\n" +
@@ -603,27 +622,72 @@ const writeFinalPly = async (vertexDataPath, outputPath, pointCount) => {
   writeBar.start(pointCount, 0);
 
   let written = 0;
-
-  await new Promise((resolve, reject) => {
-    const input = fs.createReadStream(vertexDataPath, {
-      highWaterMark: STREAM_CHUNK_BYTES,
-    });
-    const output = fs.createWriteStream(outputPath, { flags: "a" });
-
-    const fail = (error) => reject(error);
-    input.on("error", fail);
-    output.on("error", fail);
-    output.on("finish", resolve);
-
-    input.on("data", (chunk) => {
-      written += Math.floor(chunk.length / OUTPUT_RECORD_BYTES);
-      if (written === pointCount || written % PROGRESS_BATCH === 0) {
-        writeBar.update(Math.min(written, pointCount));
-      }
-    });
-
-    input.pipe(output);
+  const input = fs.createReadStream(vertexDataPath, {
+    highWaterMark: STREAM_CHUNK_BYTES,
   });
+  const output = fs.createWriteStream(outputPath, {
+    flags: "a",
+    encoding: "ascii",
+  });
+
+  try {
+    let leftover = Buffer.alloc(0);
+
+    for await (const chunk of input) {
+      const buffer = leftover.length ? Buffer.concat([leftover, chunk]) : chunk;
+      const completeBytes =
+        buffer.length - (buffer.length % OUTPUT_RECORD_BYTES);
+
+      if (completeBytes > 0) {
+        let text = "";
+        for (
+          let offset = 0;
+          offset < completeBytes;
+          offset += OUTPUT_RECORD_BYTES
+        ) {
+          const x = buffer.readFloatLE(offset);
+          const y = buffer.readFloatLE(offset + 4);
+          const z = buffer.readFloatLE(offset + 8);
+          const r = buffer.readUInt8(offset + 12);
+          const g = buffer.readUInt8(offset + 13);
+          const b = buffer.readUInt8(offset + 14);
+          const a = buffer.readUInt8(offset + 15);
+
+          text +=
+            `${formatAsciiFloat(x)} ${formatAsciiFloat(y)} ${formatAsciiFloat(z)} ` +
+            `${r} ${g} ${b} ${a}\n`;
+        }
+
+        if (!output.write(text)) {
+          await new Promise((resolve, reject) => {
+            output.once("drain", resolve);
+            output.once("error", reject);
+          });
+        }
+
+        written += completeBytes / OUTPUT_RECORD_BYTES;
+        if (written === pointCount || written % PROGRESS_BATCH === 0) {
+          writeBar.update(Math.min(written, pointCount));
+        }
+      }
+
+      leftover = buffer.subarray(completeBytes);
+    }
+
+    if (leftover.length !== 0) {
+      throw new Error("Corrupt staged output: incomplete point record.");
+    }
+
+    await new Promise((resolve, reject) => {
+      output.on("finish", resolve);
+      output.on("error", reject);
+      output.end();
+    });
+  } catch (error) {
+    input.destroy();
+    output.destroy();
+    throw error;
+  }
 
   writeBar.update(pointCount);
   writeBar.stop();
@@ -631,6 +695,89 @@ const writeFinalPly = async (vertexDataPath, outputPath, pointCount) => {
 
 const isPromiseLike = (value) =>
   value != null && typeof value.then === "function";
+
+const formatAsciiFloat = (value) => {
+  const text = Number(value)
+    .toFixed(6)
+    .replace(/\.?0+$/, "");
+  return text === "-0" ? "0" : text;
+};
+
+const printTimingSummary = (
+  startedAtNs,
+  actualInputPointCount,
+  declaredVertexCount,
+) => {
+  console.log(
+    buildTimingSummaryLines(
+      startedAtNs,
+      actualInputPointCount,
+      declaredVertexCount,
+    ).join("\n"),
+  );
+};
+
+const buildTimingSummaryLines = (
+  startedAtNs,
+  actualInputPointCount,
+  declaredVertexCount,
+) => {
+  const elapsedNs = process.hrtime.bigint() - startedAtNs;
+  const elapsedSeconds = Number(elapsedNs) / 1e9;
+  const lines = [`Elapsed wall time: ${formatDuration(elapsedSeconds)}`];
+
+  lines.push(`Actual parsed input points: ${actualInputPointCount}`);
+  if (
+    Number.isFinite(declaredVertexCount) &&
+    declaredVertexCount > 0 &&
+    declaredVertexCount !== actualInputPointCount
+  ) {
+    lines.push(`Header-declared input points: ${declaredVertexCount}`);
+  }
+
+  if (actualInputPointCount > 0) {
+    const secondsPerPoint = elapsedSeconds / actualInputPointCount;
+    const microsecondsPerPoint = secondsPerPoint * 1e6;
+    const estimatedSeconds = secondsPerPoint * ESTIMATE_POINT_COUNT;
+
+    lines.push(
+      `Average wall time per input point: ${microsecondsPerPoint.toFixed(3)} us`,
+    );
+    lines.push(
+      `Estimated wall time for ${ESTIMATE_POINT_COUNT} points: ${formatDuration(estimatedSeconds)}`,
+    );
+  } else {
+    lines.push("Average wall time per input point: n/a");
+    lines.push(`Estimated wall time for ${ESTIMATE_POINT_COUNT} points: n/a`);
+  }
+
+  return lines;
+};
+
+const formatDuration = (totalSeconds) => {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return "n/a";
+
+  const roundedSeconds = Math.round(totalSeconds);
+  const days = Math.floor(roundedSeconds / 86400);
+  const hours = Math.floor((roundedSeconds % 86400) / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+
+  if (days > 0) {
+    return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  if (roundedSeconds > 0) {
+    return `${roundedSeconds}s`;
+  }
+
+  return `${(totalSeconds * 1000).toFixed(1)}ms`;
+};
 
 class BufferedShardWriter {
   static create = async (filePath, bufferBytes) => {

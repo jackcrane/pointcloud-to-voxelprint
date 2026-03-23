@@ -27,15 +27,25 @@ export const parseHeaderText = (headerText) => {
 export const getVertexFieldIndices = (props) => {
   const colorIndex = (primary, fallback) =>
     props.findIndex((prop) => prop.name === primary || prop.name === fallback);
+  const colorType = (index) => (index >= 0 ? props[index].type : null);
+
+  const r = colorIndex("red", "r");
+  const g = colorIndex("green", "g");
+  const b = colorIndex("blue", "b");
+  const a = colorIndex("alpha", "a");
 
   return {
     x: props.findIndex((prop) => prop.name === "x"),
     y: props.findIndex((prop) => prop.name === "y"),
     z: props.findIndex((prop) => prop.name === "z"),
-    r: colorIndex("red", "r"),
-    g: colorIndex("green", "g"),
-    b: colorIndex("blue", "b"),
-    a: colorIndex("alpha", "a"),
+    r,
+    g,
+    b,
+    a,
+    rType: colorType(r),
+    gType: colorType(g),
+    bType: colorType(b),
+    aType: colorType(a),
   };
 };
 
@@ -81,21 +91,58 @@ export const readColorFromParts = (parts, cidx) => {
 
   if (!haveRGB) return null;
 
-  const r = normalizeColorValue(parts[cidx.r]);
-  const g = normalizeColorValue(parts[cidx.g]);
-  const b = normalizeColorValue(parts[cidx.b]);
+  const r = normalizeColorValue(parts[cidx.r], cidx.rType);
+  const g = normalizeColorValue(parts[cidx.g], cidx.gType);
+  const b = normalizeColorValue(parts[cidx.b], cidx.bType);
   const a = cidx.a >= 0 && parts[cidx.a] != null
-    ? normalizeColorValue(parts[cidx.a])
+    ? normalizeColorValue(parts[cidx.a], cidx.aType)
     : null;
 
   return { r, g, b, a };
 };
 
-export const normalizeColorValue = (value) => {
+export const normalizeColorValue = (value, type = null) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
+
+  if (type != null) {
+    const kind = classifyPlyType(type);
+
+    if (kind === "normalized_float") {
+      if (n <= 1 && n >= 0) return Math.round(n * 255);
+      return Math.max(0, Math.min(255, Math.round(n)));
+    }
+
+    if (kind?.unsignedMax != null) {
+      const clamped = Math.max(0, Math.min(kind.unsignedMax, n));
+      if (kind.unsignedMax <= 255) return Math.round(clamped);
+      return Math.round((clamped * 255) / kind.unsignedMax);
+    }
+  }
+
   if (n <= 1 && n >= 0) return Math.round(n * 255);
   return Math.max(0, Math.min(255, Math.round(n)));
+};
+
+const classifyPlyType = (type) => {
+  switch (String(type).toLowerCase()) {
+    case "uchar":
+    case "uint8":
+      return { unsignedMax: 0xff };
+    case "ushort":
+    case "uint16":
+      return { unsignedMax: 0xffff };
+    case "uint":
+    case "uint32":
+      return { unsignedMax: 0xffffffff };
+    case "float":
+    case "float32":
+    case "double":
+    case "float64":
+      return "normalized_float";
+    default:
+      return null;
+  }
 };
 
 const parseHeaderLines = (headerLines) => {
