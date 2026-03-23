@@ -63,6 +63,10 @@ typedef struct {
   double write_seconds;
 } QuantizeRun;
 
+static bool should_run_stage(const QuantizeRun *run, QuantizeStage stage) {
+  return (run->options.stage_mask & (unsigned)stage) != 0;
+}
+
 static void init_bounds(Bounds *bounds) {
   bounds->min_x = INFINITY;
   bounds->min_y = INFINITY;
@@ -808,6 +812,9 @@ static void quantize_run_init(QuantizeRun *run, const QuantizeOptions *options) 
 }
 
 static uint64_t actual_input_point_count(const QuantizeRun *run) {
+  if (!should_run_stage(run, QUANTIZE_STAGE_SHARD)) {
+    return run->bounds_point_count;
+  }
   return run->bounds_point_count < run->shard_pass_point_count
       ? run->bounds_point_count
       : run->shard_pass_point_count;
@@ -822,7 +829,10 @@ static int prepare_paths(const QuantizeRun *run) {
     fprintf(stderr, "Cannot read '%s': %s\n", run->options.input_path, strerror(errno));
     return -1;
   }
-  return ensure_parent_dir(run->options.output_path);
+  if (should_run_stage(run, QUANTIZE_STAGE_WRITE)) {
+    return ensure_parent_dir(run->options.output_path);
+  }
+  return 0;
 }
 
 static int scan_bounds(QuantizeRun *run) {
@@ -963,6 +973,24 @@ static int write_output(QuantizeRun *run) {
   return 0;
 }
 
+static int finish_without_output(const QuantizeRun *run, const char *message) {
+  printf("%s\n", message);
+  if (should_run_stage(run, QUANTIZE_STAGE_BOUNDS)) {
+    print_stage_duration("Bounds scan", run->bounds_seconds);
+  }
+  if (should_run_stage(run, QUANTIZE_STAGE_SHARD)) {
+    print_stage_duration("Shard points", run->shard_seconds);
+  }
+  if (should_run_stage(run, QUANTIZE_STAGE_REDUCE)) {
+    print_stage_duration("Reduce shards", run->reduce_seconds);
+  }
+  print_timing_summary(
+      now_seconds() - run->total_started_at,
+      actual_input_point_count(run),
+      run->header.vertex_count);
+  return 0;
+}
+
 static int write_empty_result(
     const QuantizeRun *run,
     const char *message,
@@ -1020,7 +1048,15 @@ int run_quantize(const QuantizeOptions *options) {
     goto cleanup;
   }
   if (run.header.vertex_count == 0) {
-    rc = write_empty_result(&run, "Input has no vertices. Wrote an empty quantized PLY.", false, false);
+    if (should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
+      rc = write_empty_result(
+          &run,
+          "Input has no vertices. Wrote an empty quantized PLY.",
+          false,
+          false);
+    } else {
+      rc = finish_without_output(&run, "Input has no vertices. No output written.");
+    }
     goto cleanup;
   }
 
@@ -1028,11 +1064,21 @@ int run_quantize(const QuantizeOptions *options) {
     goto cleanup;
   }
   if (!bounds_are_valid(&run.bounds)) {
-    rc = write_empty_result(
-        &run,
-        "Input had no valid numeric vertices. Wrote an empty quantized PLY.",
-        true,
-        false);
+    if (should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
+      rc = write_empty_result(
+          &run,
+          "Input had no valid numeric vertices. Wrote an empty quantized PLY.",
+          true,
+          false);
+    } else {
+      rc = finish_without_output(
+          &run,
+          "Input had no valid numeric vertices. No output written.");
+    }
+    goto cleanup;
+  }
+  if (!should_run_stage(&run, QUANTIZE_STAGE_SHARD)) {
+    rc = finish_without_output(&run, "Stopped after bounds scan.");
     goto cleanup;
   }
 
@@ -1044,15 +1090,29 @@ int run_quantize(const QuantizeOptions *options) {
     goto cleanup;
   }
   if (run.sharded_point_count == 0) {
-    rc = write_empty_result(
-        &run,
-        "Input had no valid numeric vertices to quantize. Wrote an empty PLY.",
-        true,
-        true);
+    if (should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
+      rc = write_empty_result(
+          &run,
+          "Input had no valid numeric vertices to quantize. Wrote an empty PLY.",
+          true,
+          true);
+    } else {
+      rc = finish_without_output(
+          &run,
+          "Input had no valid numeric vertices to quantize. No output written.");
+    }
+    goto cleanup;
+  }
+  if (!should_run_stage(&run, QUANTIZE_STAGE_REDUCE)) {
+    rc = finish_without_output(&run, "Stopped after sharding points.");
     goto cleanup;
   }
 
   if (reduce_shards_to_staging(&run) != 0) {
+    goto cleanup;
+  }
+  if (!should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
+    rc = finish_without_output(&run, "Stopped after reducing shards.");
     goto cleanup;
   }
   if (verify_staged_output(&run) != 0) {

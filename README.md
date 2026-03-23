@@ -171,13 +171,20 @@ make quantize
 Command:
 
 ```bash
-./quantize [--log-interval 10000000] <input.ply> <output.ply>
+./quantize [--log-interval 10000000] [--steps bounds[,shard[,reduce[,write]]]] <input.ply> <output.ply>
 ```
 
 Example:
 
 ```bash
 ./quantize --log-interval 10000000 data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+```
+
+Partial-run examples:
+
+```bash
+./quantize --steps bounds data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./quantize --steps bounds,shard,reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
 ```
 
 What [`quantize.c`](./quantize.c) does:
@@ -193,13 +200,19 @@ What [`quantize.c`](./quantize.c) does:
 Important behaviors:
 
 - input and output paths must differ
-- the output directory is created if missing
+- the output directory is created if missing when the `write` step is enabled
 - temporary working files are created in the current working directory and retained after the run; the binary prints the temp directory path before exit
 - retained shard files are plain text records with `cell_id x y z r g b a packed_color`
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
 - periodic progress logs are emitted every `10,000,000` records by default; use `--log-interval N` to change that or `--log-interval 0` to disable them
+- `--steps` defaults to `bounds,shard,reduce,write`
+- `--steps` only accepts a prefix of the full pipeline:
+  `bounds`, `bounds,shard`, `bounds,shard,reduce`, or `bounds,shard,reduce,write`
+- when `write` is omitted, the run stops after the requested stage and prints a partial summary instead of writing the final output PLY
+- `--steps bounds` is useful for validating parseability and measuring the bounds scan only
+- `--steps bounds,shard,reduce` is useful for producing staged quantized data and timing the full reduction path without writing the final PLY
 
 Current implementation characteristics:
 
