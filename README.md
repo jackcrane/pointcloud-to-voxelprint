@@ -208,6 +208,8 @@ Important behaviors:
 - retained shard files are plain text records with `cell_id x y z r g b a packed_color`
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
+- reduce writes one retained binary staging file per shard as `reduced-000.bin` through `reduced-127.bin`
+- existing shard cache files remain the same retained plain-text records, so `--steps reduce` can reuse a previously generated cache without rerunning sharding
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
 - periodic progress logs are emitted every `10,000,000` records by default; use `--log-interval N` to change that or `--log-interval 0` to disable them
 - `--steps` always writes the final output when applicable

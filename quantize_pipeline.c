@@ -25,11 +25,27 @@ typedef struct {
 
 typedef struct {
   uint64_t cell_id;
-  float x;
-  float y;
-  float z;
   uint32_t color;
-} ShardRecord;
+  uint32_t count;
+} PairCountEntry;
+
+typedef struct {
+  PairCountEntry *entries;
+  size_t capacity;
+  size_t used;
+} PairCountTable;
+
+typedef struct {
+  uint64_t cell_id;
+  uint32_t best_color;
+  uint32_t best_count;
+} CellBestEntry;
+
+typedef struct {
+  CellBestEntry *entries;
+  size_t capacity;
+  size_t used;
+} CellBestTable;
 
 typedef struct {
   Bounds *bounds;
@@ -43,8 +59,8 @@ typedef struct {
 
 typedef struct {
   char *temp_dir;
-  char *output_data_path;
   char *shard_paths[SHARD_COUNT];
+  char *reduced_paths[SHARD_COUNT];
   BufferedWriter shard_writers[SHARD_COUNT];
   bool shard_writers_open;
 } TempPaths;
@@ -88,17 +104,23 @@ static Grid build_default_grid(void) {
   return grid;
 }
 
-static Scaler build_scaler(const Bounds *bounds, Grid grid) {
+static Scaler build_grid_scaler(Grid grid) {
   Scaler scaler;
+  memset(&scaler, 0, sizeof(scaler));
   scaler.grid = grid;
+  scaler.grid_x_u64 = (uint64_t)grid.x;
+  scaler.grid_y_u64 = (uint64_t)grid.y;
+  return scaler;
+}
+
+static Scaler build_scaler(const Bounds *bounds, Grid grid) {
+  Scaler scaler = build_grid_scaler(grid);
   scaler.min_x = bounds->min_x;
   scaler.min_y = bounds->min_y;
   scaler.min_z = bounds->min_z;
   scaler.range_x = bounds->max_x - bounds->min_x;
   scaler.range_y = bounds->max_y - bounds->min_y;
   scaler.range_z = bounds->max_z - bounds->min_z;
-  scaler.grid_x_u64 = (uint64_t)grid.x;
-  scaler.grid_y_u64 = (uint64_t)grid.y;
   return scaler;
 }
 
@@ -349,89 +371,198 @@ static int shard_pass_visitor(const Vertex *vertex, void *ctx) {
   return 0;
 }
 
-static int compare_shard_records(const void *lhs_ptr, const void *rhs_ptr) {
-  const ShardRecord *lhs = lhs_ptr;
-  const ShardRecord *rhs = rhs_ptr;
+static uint64_t mix_u64(uint64_t value) {
+  value += UINT64_C(0x9e3779b97f4a7c15);
+  value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+  value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+  return value ^ (value >> 31);
+}
 
-  if (lhs->cell_id < rhs->cell_id) {
+static size_t round_up_power_of_two(size_t minimum) {
+  size_t capacity = 1024;
+  while (capacity < minimum) {
+    if (capacity > SIZE_MAX / 2) {
+      return 0;
+    }
+    capacity *= 2;
+  }
+  return capacity;
+}
+
+static size_t capacity_for_expected_items(size_t expected_items) {
+  size_t minimum = expected_items < 16 ? 1024 : expected_items + (expected_items / 2);
+  return round_up_power_of_two(minimum);
+}
+
+static int pair_count_table_init(PairCountTable *table, size_t expected_items) {
+  size_t capacity = capacity_for_expected_items(expected_items);
+  if (capacity == 0 || capacity > SIZE_MAX / sizeof(*table->entries)) {
+    fprintf(stderr, "Pair-count table is too large to allocate.\n");
     return -1;
   }
-  if (lhs->cell_id > rhs->cell_id) {
-    return 1;
-  }
-  if (lhs->color < rhs->color) {
+
+  table->entries = calloc(capacity, sizeof(*table->entries));
+  if (table->entries == NULL) {
+    fprintf(stderr, "Failed to allocate pair-count table.\n");
     return -1;
   }
-  if (lhs->color > rhs->color) {
-    return 1;
-  }
+
+  table->capacity = capacity;
+  table->used = 0;
   return 0;
 }
 
-static int parse_shard_record_line(
-    const char *line,
-    uint64_t *cell_id_out,
-    float *x_out,
-    float *y_out,
-    float *z_out,
-    uint32_t *color_out) {
-  errno = 0;
-  char *end = NULL;
-  unsigned long long cell_id = strtoull(line, &end, 10);
-  if (errno != 0 || end == line) {
+static void pair_count_table_free(PairCountTable *table) {
+  free(table->entries);
+  table->entries = NULL;
+  table->capacity = 0;
+  table->used = 0;
+}
+
+static int pair_count_table_grow(PairCountTable *table) {
+  PairCountTable next = {0};
+  if (pair_count_table_init(&next, table->capacity) != 0) {
     return -1;
   }
 
-  float coords[3];
-  for (int i = 0; i < 3; ++i) {
-    while (*end != '\0' && isspace((unsigned char)*end)) {
-      end++;
-    }
-    if (*end == '\0') {
-      return -1;
+  size_t mask = next.capacity - 1;
+  for (size_t i = 0; i < table->capacity; ++i) {
+    PairCountEntry entry = table->entries[i];
+    if (entry.count == 0) {
+      continue;
     }
 
-    errno = 0;
-    char *next = NULL;
-    double value = strtod(end, &next);
-    if (errno != 0 || next == end || !isfinite(value)) {
-      return -1;
+    size_t index = (size_t)mix_u64(entry.cell_id ^ ((uint64_t)entry.color << 32)) & mask;
+    while (next.entries[index].count != 0) {
+      index = (index + 1) & mask;
     }
-    coords[i] = (float)value;
-    end = next;
+    next.entries[index] = entry;
+    next.used++;
   }
 
-  for (int i = 0; i < 4; ++i) {
-    while (*end != '\0' && isspace((unsigned char)*end)) {
-      end++;
-    }
-    if (*end == '\0') {
-      return -1;
-    }
+  pair_count_table_free(table);
+  *table = next;
+  return 0;
+}
 
-    errno = 0;
-    char *next = NULL;
-    (void)strtoull(end, &next, 10);
-    if (errno != 0 || next == end) {
-      return -1;
-    }
-    end = next;
+static int pair_count_table_increment(
+    PairCountTable *table,
+    uint64_t cell_id,
+    uint32_t color,
+    uint32_t *count_out) {
+  if ((table->used + 1) * 10 >= table->capacity * 7 && pair_count_table_grow(table) != 0) {
+    return -1;
   }
 
-  while (*end != '\0' && isspace((unsigned char)*end)) {
-    end++;
+  size_t mask = table->capacity - 1;
+  size_t index = (size_t)mix_u64(cell_id ^ ((uint64_t)color << 32)) & mask;
+  while (true) {
+    PairCountEntry *entry = &table->entries[index];
+    if (entry->count == 0) {
+      entry->cell_id = cell_id;
+      entry->color = color;
+      entry->count = 1;
+      table->used++;
+      *count_out = 1;
+      return 0;
+    }
+    if (entry->cell_id == cell_id && entry->color == color) {
+      if (entry->count == UINT32_MAX) {
+        fprintf(stderr, "Shard color count overflowed for cell %" PRIu64 ".\n", cell_id);
+        return -1;
+      }
+      entry->count++;
+      *count_out = entry->count;
+      return 0;
+    }
+    index = (index + 1) & mask;
   }
-  if (*end == '\0') {
+}
+
+static int cell_best_table_init(CellBestTable *table, size_t expected_items) {
+  size_t capacity = capacity_for_expected_items(expected_items);
+  if (capacity == 0 || capacity > SIZE_MAX / sizeof(*table->entries)) {
+    fprintf(stderr, "Cell-best table is too large to allocate.\n");
+    return -1;
+  }
+
+  table->entries = calloc(capacity, sizeof(*table->entries));
+  if (table->entries == NULL) {
+    fprintf(stderr, "Failed to allocate cell-best table.\n");
+    return -1;
+  }
+
+  table->capacity = capacity;
+  table->used = 0;
+  return 0;
+}
+
+static void cell_best_table_free(CellBestTable *table) {
+  free(table->entries);
+  table->entries = NULL;
+  table->capacity = 0;
+  table->used = 0;
+}
+
+static int cell_best_table_update(
+    CellBestTable *table,
+    uint64_t cell_id,
+    uint32_t color,
+    uint32_t count) {
+  size_t mask = table->capacity - 1;
+  size_t index = (size_t)mix_u64(cell_id) & mask;
+  while (true) {
+    CellBestEntry *entry = &table->entries[index];
+    if (entry->best_count == 0) {
+      entry->cell_id = cell_id;
+      entry->best_color = color;
+      entry->best_count = count;
+      table->used++;
+      return 0;
+    }
+    if (entry->cell_id == cell_id) {
+      if (count > entry->best_count || (count == entry->best_count && color < entry->best_color)) {
+        entry->best_color = color;
+        entry->best_count = count;
+      }
+      return 0;
+    }
+    index = (index + 1) & mask;
+  }
+}
+
+static int parse_shard_record_key(const char *line, uint64_t *cell_id_out, uint32_t *color_out) {
+  errno = 0;
+  char *cell_end = NULL;
+  unsigned long long cell_id = strtoull(line, &cell_end, 10);
+  if (errno != 0 || cell_end == line) {
+    return -1;
+  }
+
+  const char *scan = cell_end;
+  const char *last_token = NULL;
+  while (*scan != '\0') {
+    while (*scan != '\0' && isspace((unsigned char)*scan)) {
+      scan++;
+    }
+    if (*scan == '\0') {
+      break;
+    }
+    last_token = scan;
+    while (*scan != '\0' && !isspace((unsigned char)*scan)) {
+      scan++;
+    }
+  }
+  if (last_token == NULL) {
     return -1;
   }
 
   errno = 0;
   char *color_end = NULL;
-  unsigned long long color = strtoull(end, &color_end, 10);
-  if (errno != 0 || color_end == end || color > UINT32_MAX) {
+  unsigned long long color = strtoull(last_token, &color_end, 10);
+  if (errno != 0 || color_end == last_token || color > UINT32_MAX) {
     return -1;
   }
-
   while (*color_end != '\0' && isspace((unsigned char)*color_end)) {
     color_end++;
   }
@@ -440,17 +571,16 @@ static int parse_shard_record_line(
   }
 
   *cell_id_out = (uint64_t)cell_id;
-  *x_out = coords[0];
-  *y_out = coords[1];
-  *z_out = coords[2];
   *color_out = (uint32_t)color;
   return 0;
 }
 
 static int reduce_shard(
     const char *shard_path,
-    BufferedWriter *output_writer,
+    const char *reduced_path,
+    const Scaler *scaler,
     ProgressLogger *progress,
+    uint64_t processed_base,
     uint64_t *output_point_count,
     uint64_t *input_record_count_out) {
   *input_record_count_out = 0;
@@ -461,34 +591,38 @@ static int reduce_shard(
     return -1;
   }
 
+  BufferedWriter output_writer;
+  if (buffered_writer_open(&output_writer, reduced_path, OUTPUT_RECORD_BYTES) != 0) {
+    return -1;
+  }
+
   if (stat_buf.st_size == 0) {
-    return 0;
+    return buffered_writer_close(&output_writer);
   }
 
   FILE *fp = fopen(shard_path, "rb");
   if (fp == NULL) {
     fprintf(stderr, "Failed to open shard '%s': %s\n", shard_path, strerror(errno));
+    buffered_writer_close(&output_writer);
     return -1;
   }
+  setvbuf(fp, NULL, _IOFBF, STREAM_CHUNK_BYTES);
 
-  size_t capacity = (size_t)(stat_buf.st_size / 24);
-  if (capacity < 1024) {
-    capacity = 1024;
-  }
-  if (capacity > (SIZE_MAX / sizeof(ShardRecord))) {
-    capacity = SIZE_MAX / sizeof(ShardRecord);
+  size_t expected_pairs = (size_t)((uint64_t)stat_buf.st_size / 256);
+  if (expected_pairs < 1024) {
+    expected_pairs = 1024;
   }
 
-  ShardRecord *records = malloc(capacity * sizeof(*records));
-  if (records == NULL) {
-    fprintf(stderr, "Failed to allocate reduce buffer for '%s'.\n", shard_path);
+  PairCountTable pair_counts = {0};
+  if (pair_count_table_init(&pair_counts, expected_pairs) != 0) {
     fclose(fp);
+    buffered_writer_close(&output_writer);
     return -1;
   }
 
   char *line = NULL;
   size_t line_capacity = 0;
-  uint64_t record_count = 0;
+  uint64_t records_seen = 0;
   int rc = 0;
 
   while (getline(&line, &line_capacity, fp) != -1) {
@@ -498,92 +632,77 @@ static int reduce_shard(
     }
 
     uint64_t cell_id = 0;
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
     uint32_t color = 0;
-    if (parse_shard_record_line(trimmed, &cell_id, &x, &y, &z, &color) != 0) {
+    if (parse_shard_record_key(trimmed, &cell_id, &color) != 0) {
       fprintf(stderr, "Corrupt shard file: %s\n", shard_path);
       rc = -1;
       break;
     }
 
-    if ((size_t)record_count == capacity) {
-      if (capacity > (SIZE_MAX / sizeof(ShardRecord)) / 2) {
-        fprintf(stderr, "Shard '%s' is too large to reduce in memory.\n", shard_path);
-        rc = -1;
-        break;
-      }
-
-      size_t next_capacity = capacity * 2;
-      ShardRecord *next_records = realloc(records, next_capacity * sizeof(*records));
-      if (next_records == NULL) {
-        fprintf(stderr, "Failed to grow reduce buffer for '%s'.\n", shard_path);
-        rc = -1;
-        break;
-      }
-
-      records = next_records;
-      capacity = next_capacity;
+      uint32_t count = 0;
+    if (pair_count_table_increment(&pair_counts, cell_id, color, &count) != 0) {
+      rc = -1;
+      break;
     }
-
-    records[record_count].cell_id = cell_id;
-    records[record_count].x = x;
-    records[record_count].y = y;
-    records[record_count].z = z;
-    records[record_count].color = color;
-    record_count++;
-    progress_logger_maybe_log(progress, record_count);
+    records_seen++;
+    progress_logger_maybe_log(progress, processed_base + records_seen);
   }
 
   free(line);
+  if (ferror(fp)) {
+    fprintf(stderr, "Failed reading shard '%s': %s\n", shard_path, strerror(errno));
+    rc = -1;
+  }
   fclose(fp);
-  *input_record_count_out = record_count;
+  *input_record_count_out = records_seen;
 
   if (rc != 0) {
-    free(records);
+    pair_count_table_free(&pair_counts);
+    buffered_writer_close(&output_writer);
     return -1;
   }
 
-  qsort(records, (size_t)record_count, sizeof(*records), compare_shard_records);
+  CellBestTable cell_best = {0};
+  if (cell_best_table_init(&cell_best, pair_counts.used) != 0) {
+    pair_count_table_free(&pair_counts);
+    buffered_writer_close(&output_writer);
+    return -1;
+  }
 
-  uint64_t index = 0;
-  while (index < record_count) {
-    uint64_t cell_id = records[index].cell_id;
-    float x = records[index].x;
-    float y = records[index].y;
-    float z = records[index].z;
-    uint32_t best_color = records[index].color;
-    uint64_t best_count = 0;
-
-    while (index < record_count && records[index].cell_id == cell_id) {
-      uint32_t color = records[index].color;
-      uint64_t count = 0;
-      while (index < record_count &&
-             records[index].cell_id == cell_id &&
-             records[index].color == color) {
-        count++;
-        index++;
-      }
-
-      if (count > best_count || (count == best_count && color < best_color)) {
-        best_count = count;
-        best_color = color;
-      }
+  for (size_t i = 0; i < pair_counts.capacity; ++i) {
+    PairCountEntry entry = pair_counts.entries[i];
+    if (entry.count == 0) {
+      continue;
     }
-
-    uint8_t r, g, b, a;
-    unpack_color(best_color, &r, &g, &b, &a);
-    if (buffered_writer_append_output(output_writer, x, y, z, r, g, b, a) != 0) {
-      free(records);
+    if (cell_best_table_update(&cell_best, entry.cell_id, entry.color, entry.count) != 0) {
+      cell_best_table_free(&cell_best);
+      pair_count_table_free(&pair_counts);
+      buffered_writer_close(&output_writer);
       return -1;
     }
+  }
+  pair_count_table_free(&pair_counts);
 
+  for (size_t i = 0; i < cell_best.capacity; ++i) {
+    CellBestEntry entry = cell_best.entries[i];
+    if (entry.best_count == 0) {
+      continue;
+    }
+
+    float x, y, z;
+    uint8_t r, g, b, a;
+    decode_cell_center(scaler, entry.cell_id, &x, &y, &z);
+    unpack_color(entry.best_color, &r, &g, &b, &a);
+    if (buffered_writer_append_output(&output_writer, x, y, z, r, g, b, a) != 0) {
+      cell_best_table_free(&cell_best);
+      buffered_writer_close(&output_writer);
+      return -1;
+    }
     (*output_point_count)++;
   }
 
-  free(records);
-  return 0;
+  cell_best_table_free(&cell_best);
+  return buffered_writer_close(&output_writer);
 }
 
 static int write_empty_ply(const char *output_path) {
@@ -617,7 +736,7 @@ static int write_empty_ply(const char *output_path) {
 }
 
 static int write_final_ply(
-    const char *vertex_data_path,
+    const TempPaths *temp_paths,
     const char *output_path,
     uint64_t point_count,
     ProgressLogger *progress) {
@@ -662,69 +781,95 @@ static int write_final_ply(
     return 0;
   }
 
-  FILE *input = fopen(vertex_data_path, "rb");
-  if (input == NULL) {
-    fprintf(stderr, "Failed to open staged output '%s': %s\n", vertex_data_path, strerror(errno));
-    fclose(output);
-    return -1;
-  }
-
-  setvbuf(input, NULL, _IOFBF, STREAM_CHUNK_BYTES);
-
   unsigned char buffer[OUTPUT_RECORD_BYTES];
   char line[128];
   char x_text[32];
   char y_text[32];
   char z_text[32];
   int rc = 0;
+  uint64_t written_count = 0;
 
-  for (uint64_t i = 0; i < point_count; ++i) {
-    if (fread(buffer, 1, OUTPUT_RECORD_BYTES, input) != OUTPUT_RECORD_BYTES) {
-      fprintf(stderr, "Corrupt staged output: incomplete point record.\n");
+  for (int shard_index = 0; shard_index < SHARD_COUNT; ++shard_index) {
+    const char *vertex_data_path = temp_paths->reduced_paths[shard_index];
+    FILE *input = fopen(vertex_data_path, "rb");
+    if (input == NULL) {
+      fprintf(stderr, "Failed to open staged output '%s': %s\n", vertex_data_path, strerror(errno));
       rc = -1;
       break;
     }
 
-    union {
-      uint32_t u;
-      float f;
-    } fx, fy, fz;
+    setvbuf(input, NULL, _IOFBF, STREAM_CHUNK_BYTES);
 
-    fx.u = read_u32_le(buffer);
-    fy.u = read_u32_le(buffer + 4);
-    fz.u = read_u32_le(buffer + 8);
+    while (true) {
+      size_t bytes_read = fread(buffer, 1, OUTPUT_RECORD_BYTES, input);
+      if (bytes_read == 0) {
+        if (ferror(input)) {
+          fprintf(stderr, "Failed reading staged output '%s': %s\n", vertex_data_path, strerror(errno));
+          rc = -1;
+        }
+        break;
+      }
+      if (bytes_read != OUTPUT_RECORD_BYTES) {
+        fprintf(stderr, "Corrupt staged output '%s': incomplete point record.\n", vertex_data_path);
+        rc = -1;
+        break;
+      }
 
-    format_ascii_float(fx.f, x_text, sizeof(x_text));
-    format_ascii_float(fy.f, y_text, sizeof(y_text));
-    format_ascii_float(fz.f, z_text, sizeof(z_text));
+      union {
+        uint32_t u;
+        float f;
+      } fx, fy, fz;
 
-    int line_len = snprintf(
-        line,
-        sizeof(line),
-        "%s %s %s %u %u %u %u\n",
-        x_text,
-        y_text,
-        z_text,
-        (unsigned)buffer[12],
-        (unsigned)buffer[13],
-        (unsigned)buffer[14],
-        (unsigned)buffer[15]);
-    if (line_len < 0 || (size_t)line_len >= sizeof(line)) {
-      fprintf(stderr, "Failed to format output vertex line.\n");
-      rc = -1;
-      break;
+      fx.u = read_u32_le(buffer);
+      fy.u = read_u32_le(buffer + 4);
+      fz.u = read_u32_le(buffer + 8);
+
+      format_ascii_float(fx.f, x_text, sizeof(x_text));
+      format_ascii_float(fy.f, y_text, sizeof(y_text));
+      format_ascii_float(fz.f, z_text, sizeof(z_text));
+
+      int line_len = snprintf(
+          line,
+          sizeof(line),
+          "%s %s %s %u %u %u %u\n",
+          x_text,
+          y_text,
+          z_text,
+          (unsigned)buffer[12],
+          (unsigned)buffer[13],
+          (unsigned)buffer[14],
+          (unsigned)buffer[15]);
+      if (line_len < 0 || (size_t)line_len >= sizeof(line)) {
+        fprintf(stderr, "Failed to format output vertex line.\n");
+        rc = -1;
+        break;
+      }
+
+      if (fwrite(line, 1, (size_t)line_len, output) != (size_t)line_len) {
+        fprintf(stderr, "Failed to write output vertex line.\n");
+        rc = -1;
+        break;
+      }
+
+      written_count++;
+      progress_logger_maybe_log(progress, written_count);
     }
 
-    if (fwrite(line, 1, (size_t)line_len, output) != (size_t)line_len) {
-      fprintf(stderr, "Failed to write output vertex line.\n");
-      rc = -1;
+    fclose(input);
+    if (rc != 0) {
       break;
     }
-
-    progress_logger_maybe_log(progress, i + 1);
   }
 
-  fclose(input);
+  if (rc == 0 && written_count != point_count) {
+    fprintf(
+        stderr,
+        "Staged output record mismatch: expected %" PRIu64 ", wrote %" PRIu64 "\n",
+        point_count,
+        written_count);
+    rc = -1;
+  }
+
   fclose(output);
   return rc;
 }
@@ -741,12 +886,11 @@ static void cleanup_temp_paths(TempPaths *temp_paths) {
     printf("Retained temp files under: %s\n", temp_paths->temp_dir);
   }
 
-  free(temp_paths->output_data_path);
-  temp_paths->output_data_path = NULL;
-
   for (int i = 0; i < SHARD_COUNT; ++i) {
     free(temp_paths->shard_paths[i]);
     temp_paths->shard_paths[i] = NULL;
+    free(temp_paths->reduced_paths[i]);
+    temp_paths->reduced_paths[i] = NULL;
   }
 
   free(temp_paths->temp_dir);
@@ -802,17 +946,19 @@ static int configure_temp_paths(
         buffered_writer_open(
             &temp_paths->shard_writers[i],
             temp_paths->shard_paths[i],
-            SHARD_TEXT_RECORD_ESTIMATE) != 0) {
+            96) != 0) {
       cleanup_temp_paths(temp_paths);
       return -1;
     }
-  }
 
-  temp_paths->output_data_path = dup_path_join(temp_paths->temp_dir, "quantized-vertices.bin");
-  if (temp_paths->output_data_path == NULL) {
-    fprintf(stderr, "Failed to allocate staged output path.\n");
-    cleanup_temp_paths(temp_paths);
-    return -1;
+    char reduced_name[32];
+    snprintf(reduced_name, sizeof(reduced_name), "reduced-%03d.bin", i);
+    temp_paths->reduced_paths[i] = dup_path_join(temp_paths->temp_dir, reduced_name);
+    if (temp_paths->reduced_paths[i] == NULL) {
+      fprintf(stderr, "Failed to allocate reduced shard path.\n");
+      cleanup_temp_paths(temp_paths);
+      return -1;
+    }
   }
 
   temp_paths->shard_writers_open = open_shard_writers;
@@ -1006,14 +1152,9 @@ static int shard_vertices(QuantizeRun *run) {
 }
 
 static int reduce_shards_to_staging(QuantizeRun *run) {
-  BufferedWriter output_writer;
   ProgressLogger progress;
   double started_at = now_seconds();
   uint64_t reduced_input_record_count = 0;
-
-  if (buffered_writer_open(&output_writer, run->temp_paths.output_data_path, OUTPUT_RECORD_BYTES) != 0) {
-    return -1;
-  }
 
   progress_logger_init(
       &progress,
@@ -1025,17 +1166,15 @@ static int reduce_shards_to_staging(QuantizeRun *run) {
     uint64_t shard_input_record_count = 0;
     if (reduce_shard(
             run->temp_paths.shard_paths[i],
-            &output_writer,
+            run->temp_paths.reduced_paths[i],
+            &run->scaler,
             &progress,
+            reduced_input_record_count,
             &run->output_point_count,
             &shard_input_record_count) != 0) {
-      buffered_writer_close(&output_writer);
       return -1;
     }
     reduced_input_record_count += shard_input_record_count;
-  }
-  if (buffered_writer_close(&output_writer) != 0) {
-    return -1;
   }
 
   if (run->options.start_stage == QUANTIZE_START_REDUCE || run->sharded_point_count == 0) {
@@ -1046,23 +1185,36 @@ static int reduce_shards_to_staging(QuantizeRun *run) {
 }
 
 static int verify_staged_output(const QuantizeRun *run) {
-  struct stat staged_stat;
-  if (stat(run->temp_paths.output_data_path, &staged_stat) != 0) {
-    fprintf(
-        stderr,
-        "Failed to stat staged output '%s': %s\n",
-        run->temp_paths.output_data_path,
-        strerror(errno));
-    return -1;
+  off_t total_size = 0;
+  for (int i = 0; i < SHARD_COUNT; ++i) {
+    struct stat staged_stat;
+    if (stat(run->temp_paths.reduced_paths[i], &staged_stat) != 0) {
+      fprintf(
+          stderr,
+          "Failed to stat staged output '%s': %s\n",
+          run->temp_paths.reduced_paths[i],
+          strerror(errno));
+      return -1;
+    }
+    if ((staged_stat.st_size % OUTPUT_RECORD_BYTES) != 0) {
+      fprintf(
+          stderr,
+          "Corrupt staged output '%s': size %lld is not a multiple of %d bytes\n",
+          run->temp_paths.reduced_paths[i],
+          (long long)staged_stat.st_size,
+          OUTPUT_RECORD_BYTES);
+      return -1;
+    }
+    total_size += staged_stat.st_size;
   }
 
   off_t expected_size = (off_t)(run->output_point_count * OUTPUT_RECORD_BYTES);
-  if (staged_stat.st_size != expected_size) {
+  if (total_size != expected_size) {
     fprintf(
         stderr,
         "Staged output size mismatch: expected %lld bytes, got %lld\n",
         (long long)expected_size,
-        (long long)staged_stat.st_size);
+        (long long)total_size);
     return -1;
   }
 
@@ -1080,7 +1232,7 @@ static int write_output(QuantizeRun *run) {
       run->options.log_interval,
       started_at);
   if (write_final_ply(
-          run->temp_paths.output_data_path,
+          &run->temp_paths,
           run->options.output_path,
           run->output_point_count,
           &progress) != 0) {
@@ -1185,6 +1337,7 @@ int run_quantize(const QuantizeOptions *options) {
       goto cleanup;
     }
   } else {
+    run.scaler = build_grid_scaler(build_default_grid());
     if (init_existing_temp_paths(&run.temp_paths, run.options.temp_dir_path) != 0) {
       goto cleanup;
     }

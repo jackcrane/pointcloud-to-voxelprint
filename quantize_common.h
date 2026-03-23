@@ -20,7 +20,6 @@ enum {
 
 static const uint64_t ESTIMATE_POINT_COUNT = UINT64_C(1239896640);
 static const uint64_t DEFAULT_LOG_INTERVAL = UINT64_C(10000000);
-static const size_t SHARD_TEXT_RECORD_ESTIMATE = 96;
 
 typedef enum {
   PLY_FORMAT_ASCII = 0,
