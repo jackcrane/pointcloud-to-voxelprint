@@ -24,7 +24,6 @@ enum {
   DPI_Y = 300,
   DPI_Z = 300,
   SHARD_COUNT = 128,
-  SHARD_RECORD_BYTES = 12,
   OUTPUT_RECORD_BYTES = 16,
   SHARD_BUFFER_BYTES = 1024 * 1024,
   STREAM_CHUNK_BYTES = 1024 * 1024,
@@ -32,6 +31,7 @@ enum {
 
 static const uint64_t ESTIMATE_POINT_COUNT = 1239896640ULL;
 static const uint64_t DEFAULT_LOG_INTERVAL = 10000000ULL;
+static const size_t SHARD_TEXT_RECORD_ESTIMATE = 96;
 
 typedef enum {
   PLY_FORMAT_ASCII = 0,
@@ -210,6 +210,8 @@ static int reduce_shard(
     uint64_t *output_point_count);
 static int ensure_parent_dir(const char *path);
 static void cleanup_temp_paths(TempPaths *temp_paths);
+static int parse_shard_record_line(const char *line, uint64_t *cell_id_out, uint32_t *color_out);
+static void format_ascii_float(double value, char *buffer, size_t buffer_size);
 
 static double now_seconds(void) {
   struct timespec ts;
@@ -611,17 +613,6 @@ static void write_u32_le(unsigned char *ptr, uint32_t value) {
   ptr[1] = (unsigned char)((value >> 8) & 0xffu);
   ptr[2] = (unsigned char)((value >> 16) & 0xffu);
   ptr[3] = (unsigned char)((value >> 24) & 0xffu);
-}
-
-static void write_u64_le(unsigned char *ptr, uint64_t value) {
-  ptr[0] = (unsigned char)(value & 0xffu);
-  ptr[1] = (unsigned char)((value >> 8) & 0xffu);
-  ptr[2] = (unsigned char)((value >> 16) & 0xffu);
-  ptr[3] = (unsigned char)((value >> 24) & 0xffu);
-  ptr[4] = (unsigned char)((value >> 32) & 0xffu);
-  ptr[5] = (unsigned char)((value >> 40) & 0xffu);
-  ptr[6] = (unsigned char)((value >> 48) & 0xffu);
-  ptr[7] = (unsigned char)((value >> 56) & 0xffu);
 }
 
 static double read_binary_value(const unsigned char *ptr, PlyType type) {
@@ -1160,17 +1151,61 @@ static int buffered_writer_flush(BufferedWriter *writer) {
   return 0;
 }
 
-static int buffered_writer_append_shard(BufferedWriter *writer, uint64_t cell_id, uint32_t packed_color) {
-  if (writer->used + SHARD_RECORD_BYTES > writer->capacity) {
+static int buffered_writer_append_shard_record(
+    BufferedWriter *writer,
+    uint64_t cell_id,
+    float x,
+    float y,
+    float z,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a) {
+  char line[128];
+  char x_text[32];
+  char y_text[32];
+  char z_text[32];
+  uint32_t packed_color = pack_color(r, g, b, a);
+
+  format_ascii_float(x, x_text, sizeof(x_text));
+  format_ascii_float(y, y_text, sizeof(y_text));
+  format_ascii_float(z, z_text, sizeof(z_text));
+
+  int line_len = snprintf(
+      line,
+      sizeof(line),
+      "%" PRIu64 " %s %s %s %u %u %u %u %" PRIu32 "\n",
+      cell_id,
+      x_text,
+      y_text,
+      z_text,
+      (unsigned)r,
+      (unsigned)g,
+      (unsigned)b,
+      (unsigned)a,
+      packed_color);
+  if (line_len < 0 || (size_t)line_len >= sizeof(line)) {
+    fprintf(stderr, "Failed to format shard record.\n");
+    return -1;
+  }
+
+  size_t bytes_needed = (size_t)line_len;
+  if (writer->used + bytes_needed > writer->capacity) {
     if (buffered_writer_flush(writer) != 0) {
       return -1;
     }
   }
 
-  unsigned char *slot = writer->buffer + writer->used;
-  write_u64_le(slot, cell_id);
-  write_u32_le(slot + 8, packed_color);
-  writer->used += SHARD_RECORD_BYTES;
+  if (bytes_needed > writer->capacity) {
+    if (fwrite(line, 1, bytes_needed, writer->fp) != bytes_needed) {
+      fprintf(stderr, "Failed to write shard record: %s\n", strerror(errno));
+      return -1;
+    }
+    return 0;
+  }
+
+  memcpy(writer->buffer + writer->used, line, bytes_needed);
+  writer->used += bytes_needed;
   return 0;
 }
 
@@ -1265,9 +1300,19 @@ static int shard_pass_visitor(const Vertex *vertex, void *ctx) {
   }
 
   uint64_t cell_id = quantize_cell_id(shard_ctx->scaler, vertex);
-  uint32_t packed_color = pack_color(vertex->r, vertex->g, vertex->b, vertex->a);
   int shard_index = (int)(cell_id % SHARD_COUNT);
-  if (buffered_writer_append_shard(&shard_ctx->writers[shard_index], cell_id, packed_color) != 0) {
+  float x, y, z;
+  decode_cell_center(shard_ctx->scaler, cell_id, &x, &y, &z);
+  if (buffered_writer_append_shard_record(
+          &shard_ctx->writers[shard_index],
+          cell_id,
+          x,
+          y,
+          z,
+          vertex->r,
+          vertex->g,
+          vertex->b,
+          vertex->a) != 0) {
     return -1;
   }
 
@@ -1310,43 +1355,75 @@ static int reduce_shard(
     return 0;
   }
 
-  if ((stat_buf.st_size % SHARD_RECORD_BYTES) != 0) {
-    fprintf(stderr, "Corrupt shard file: %s\n", shard_path);
-    return -1;
-  }
-
-  uint64_t record_count = (uint64_t)(stat_buf.st_size / SHARD_RECORD_BYTES);
-  if (record_count > (uint64_t)(SIZE_MAX / sizeof(ShardRecord))) {
-    fprintf(stderr, "Shard '%s' is too large to reduce in memory.\n", shard_path);
-    return -1;
-  }
-
   FILE *fp = fopen(shard_path, "rb");
   if (fp == NULL) {
     fprintf(stderr, "Failed to open shard '%s': %s\n", shard_path, strerror(errno));
     return -1;
   }
 
-  ShardRecord *records = malloc((size_t)record_count * sizeof(*records));
+  size_t capacity = (size_t)(stat_buf.st_size / 24);
+  if (capacity < 1024) {
+    capacity = 1024;
+  }
+  if (capacity > (SIZE_MAX / sizeof(ShardRecord))) {
+    capacity = SIZE_MAX / sizeof(ShardRecord);
+  }
+
+  ShardRecord *records = malloc(capacity * sizeof(*records));
   if (records == NULL) {
     fprintf(stderr, "Failed to allocate reduce buffer for '%s'.\n", shard_path);
     fclose(fp);
     return -1;
   }
 
-  unsigned char raw[SHARD_RECORD_BYTES];
-  for (uint64_t i = 0; i < record_count; ++i) {
-    if (fread(raw, 1, SHARD_RECORD_BYTES, fp) != SHARD_RECORD_BYTES) {
-      fprintf(stderr, "Failed to read shard record from '%s'.\n", shard_path);
+  char *line = NULL;
+  size_t line_capacity = 0;
+  uint64_t record_count = 0;
+
+  while (getline(&line, &line_capacity, fp) != -1) {
+    char *trimmed = trim_in_place(line);
+    if (trimmed[0] == '\0') {
+      continue;
+    }
+
+    uint64_t cell_id = 0;
+    uint32_t color = 0;
+    if (parse_shard_record_line(trimmed, &cell_id, &color) != 0) {
+      fprintf(stderr, "Corrupt shard file: %s\n", shard_path);
+      free(line);
       free(records);
       fclose(fp);
       return -1;
     }
-    records[i].cell_id = read_u64_le(raw);
-    records[i].color = read_u32_le(raw + 8);
-    progress_logger_maybe_log(progress, i + 1);
+
+    if ((size_t)record_count == capacity) {
+      if (capacity > (SIZE_MAX / sizeof(ShardRecord)) / 2) {
+        fprintf(stderr, "Shard '%s' is too large to reduce in memory.\n", shard_path);
+        free(line);
+        free(records);
+        fclose(fp);
+        return -1;
+      }
+      size_t next_capacity = capacity * 2;
+      ShardRecord *next_records = realloc(records, next_capacity * sizeof(*records));
+      if (next_records == NULL) {
+        fprintf(stderr, "Failed to grow reduce buffer for '%s'.\n", shard_path);
+        free(line);
+        free(records);
+        fclose(fp);
+        return -1;
+      }
+      records = next_records;
+      capacity = next_capacity;
+    }
+
+    records[record_count].cell_id = cell_id;
+    records[record_count].color = color;
+    record_count++;
+    progress_logger_maybe_log(progress, record_count);
   }
 
+  free(line);
   fclose(fp);
   qsort(records, (size_t)record_count, sizeof(*records), compare_shard_records);
 
@@ -1629,22 +1706,23 @@ static void cleanup_temp_paths(TempPaths *temp_paths) {
     temp_paths->shard_writers_open = false;
   }
 
+  if (temp_paths->temp_dir != NULL) {
+    printf("Retained temp files under: %s\n", temp_paths->temp_dir);
+  }
+
   if (temp_paths->output_data_path != NULL) {
-    unlink(temp_paths->output_data_path);
     free(temp_paths->output_data_path);
     temp_paths->output_data_path = NULL;
   }
 
   for (int i = 0; i < SHARD_COUNT; ++i) {
     if (temp_paths->shard_paths[i] != NULL) {
-      unlink(temp_paths->shard_paths[i]);
       free(temp_paths->shard_paths[i]);
       temp_paths->shard_paths[i] = NULL;
     }
   }
 
   if (temp_paths->temp_dir != NULL) {
-    rmdir(temp_paths->temp_dir);
     free(temp_paths->temp_dir);
     temp_paths->temp_dir = NULL;
   }
@@ -1653,7 +1731,23 @@ static void cleanup_temp_paths(TempPaths *temp_paths) {
 static int init_temp_paths(TempPaths *temp_paths) {
   memset(temp_paths, 0, sizeof(*temp_paths));
 
-  char temp_template[] = "/tmp/pointcloud-quantize-XXXXXX";
+  char cwd[PATH_MAX];
+  if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    fprintf(stderr, "Failed to determine current working directory: %s\n", strerror(errno));
+    return -1;
+  }
+
+  char temp_template[PATH_MAX + 32];
+  int template_len = snprintf(
+      temp_template,
+      sizeof(temp_template),
+      "%s/pointcloud-quantize-XXXXXX",
+      cwd);
+  if (template_len < 0 || (size_t)template_len >= sizeof(temp_template)) {
+    fprintf(stderr, "Working directory path is too long for temp directory creation.\n");
+    return -1;
+  }
+
   int temp_fd = mkstemp(temp_template);
   if (temp_fd < 0) {
     fprintf(stderr, "Failed to allocate temporary path: %s\n", strerror(errno));
@@ -1686,7 +1780,10 @@ static int init_temp_paths(TempPaths *temp_paths) {
       cleanup_temp_paths(temp_paths);
       return -1;
     }
-    if (buffered_writer_open(&temp_paths->shard_writers[i], temp_paths->shard_paths[i], SHARD_RECORD_BYTES) != 0) {
+    if (buffered_writer_open(
+            &temp_paths->shard_writers[i],
+            temp_paths->shard_paths[i],
+            SHARD_TEXT_RECORD_ESTIMATE) != 0) {
       cleanup_temp_paths(temp_paths);
       return -1;
     }
@@ -1716,6 +1813,61 @@ static int close_shard_writers(TempPaths *temp_paths) {
   }
   temp_paths->shard_writers_open = false;
   return rc;
+}
+
+static int parse_shard_record_line(const char *line, uint64_t *cell_id_out, uint32_t *color_out) {
+  errno = 0;
+  char *end = NULL;
+  unsigned long long cell_id = strtoull(line, &end, 10);
+  if (errno != 0 || end == line) {
+    return -1;
+  }
+
+  for (int field = 0; field < 7; ++field) {
+    while (*end != '\0' && isspace((unsigned char)*end)) {
+      end++;
+    }
+    if (*end == '\0') {
+      return -1;
+    }
+
+    errno = 0;
+    char *next = NULL;
+    if (field < 3) {
+      (void)strtod(end, &next);
+    } else {
+      (void)strtoull(end, &next, 10);
+    }
+    if (errno != 0 || next == end) {
+      return -1;
+    }
+    end = next;
+  }
+
+  while (*end != '\0' && isspace((unsigned char)*end)) {
+    end++;
+  }
+  if (*end == '\0') {
+    return -1;
+  }
+
+  errno = 0;
+  char *color_end = NULL;
+  unsigned long long color = strtoull(end, &color_end, 10);
+  if (errno != 0 || color_end == end || color > UINT32_MAX) {
+    return -1;
+  }
+
+  while (*color_end != '\0' && isspace((unsigned char)*color_end)) {
+    color_end++;
+  }
+  if (*color_end != '\0') {
+    return -1;
+  }
+
+  *cell_id_out = (uint64_t)cell_id;
+  *color_out = (uint32_t)color;
+  return 0;
 }
 
 int main(int argc, char **argv) {

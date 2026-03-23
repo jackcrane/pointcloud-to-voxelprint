@@ -194,7 +194,8 @@ Important behaviors:
 
 - input and output paths must differ
 - the output directory is created if missing
-- temporary working files are created under the system temp directory and removed at the end
+- temporary working files are created in the current working directory and retained after the run; the binary prints the temp directory path before exit
+- retained shard files are plain text records with `cell_id x y z r g b a packed_color`
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
