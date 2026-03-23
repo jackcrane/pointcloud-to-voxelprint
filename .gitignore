@@ -20,3 +20,4 @@ ozark_first_1m.ply
 .gitignore
 ozark_first_10k.ply
 quantize
+*.o
