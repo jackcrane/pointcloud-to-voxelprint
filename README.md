@@ -162,19 +162,25 @@ Performance and scaling:
 
 ### 3. Quantize a Dense PLY
 
+Build the native quantizer:
+
+```bash
+make quantize
+```
+
 Command:
 
 ```bash
-node quantize.js <input.ply> <output.ply>
+./quantize <input.ply> <output.ply>
 ```
 
 Example:
 
 ```bash
-node quantize.js data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./quantize data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
 ```
 
-What [`quantize.js`](./quantize.js) does:
+What [`quantize.c`](./quantize.c) does:
 
 - reads the input PLY header
 - supports ASCII and binary little-endian vertex streams
@@ -191,6 +197,7 @@ Important behaviors:
 - temporary working files are created under the system temp directory and removed at the end
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
+- progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
 
 Current implementation characteristics:
 
@@ -198,9 +205,8 @@ Current implementation characteristics:
 - shard record size: `12` bytes
 - output vertex record size: `16` bytes
 - streaming chunk size: `1 MiB`
-- progress updates every `50,000` points
 
-This script is the most suitable path in the repository for large PLY inputs because it streams vertex data instead of building a full in-memory point set.
+This binary is the most suitable path in the repository for large PLY inputs because it streams vertex data instead of building a full in-memory point set.
 
 ### 4. Chamfer a PNG Slice Stack
 
