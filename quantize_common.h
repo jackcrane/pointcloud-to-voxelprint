@@ -98,25 +98,17 @@ typedef struct {
 } ProgressLogger;
 
 typedef enum {
-  QUANTIZE_STAGE_BOUNDS = 1u << 0,
-  QUANTIZE_STAGE_SHARD = 1u << 1,
-  QUANTIZE_STAGE_REDUCE = 1u << 2,
-  QUANTIZE_STAGE_WRITE = 1u << 3,
-} QuantizeStage;
-
-enum {
-  QUANTIZE_STAGE_ALL = QUANTIZE_STAGE_BOUNDS |
-      QUANTIZE_STAGE_SHARD |
-      QUANTIZE_STAGE_REDUCE |
-      QUANTIZE_STAGE_WRITE,
-};
+  QUANTIZE_START_BOUNDS = 0,
+  QUANTIZE_START_SHARD = 1,
+  QUANTIZE_START_REDUCE = 2,
+} QuantizeStartStage;
 
 typedef struct {
   const char *input_path;
   const char *output_path;
   const char *temp_dir_path;
   uint64_t log_interval;
-  unsigned stage_mask;
+  QuantizeStartStage start_stage;
 } QuantizeOptions;
 
 typedef int (*VertexVisitor)(const Vertex *vertex, void *ctx);

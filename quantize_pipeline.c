@@ -40,6 +40,7 @@ typedef struct {
 
 typedef struct {
   char *temp_dir;
+  char *metadata_path;
   char *output_data_path;
   char *shard_paths[SHARD_COUNT];
   BufferedWriter shard_writers[SHARD_COUNT];
@@ -63,8 +64,16 @@ typedef struct {
   double write_seconds;
 } QuantizeRun;
 
-static bool should_run_stage(const QuantizeRun *run, QuantizeStage stage) {
-  return (run->options.stage_mask & (unsigned)stage) != 0;
+typedef struct {
+  Bounds bounds;
+  Grid grid;
+  uint64_t bounds_point_count;
+  uint64_t shard_pass_point_count;
+  uint64_t sharded_point_count;
+} RunMetadata;
+
+static bool should_start_from(const QuantizeRun *run, QuantizeStartStage stage) {
+  return run->options.start_stage == stage;
 }
 
 static void init_bounds(Bounds *bounds) {
@@ -706,6 +715,8 @@ static void cleanup_temp_paths(TempPaths *temp_paths) {
 
   free(temp_paths->output_data_path);
   temp_paths->output_data_path = NULL;
+  free(temp_paths->metadata_path);
+  temp_paths->metadata_path = NULL;
 
   for (int i = 0; i < SHARD_COUNT; ++i) {
     free(temp_paths->shard_paths[i]);
@@ -737,6 +748,55 @@ static int ensure_directory_exists(const char *dir_path) {
     fprintf(stderr, "Failed to create temp directory '%s': %s\n", dir_path, strerror(errno));
     return -1;
   }
+  return 0;
+}
+
+static int configure_temp_paths(
+    TempPaths *temp_paths,
+    const char *base_dir,
+    bool open_shard_writers) {
+  temp_paths->temp_dir = strdup(base_dir);
+  if (temp_paths->temp_dir == NULL) {
+    fprintf(stderr, "Failed to allocate temp directory path.\n");
+    cleanup_temp_paths(temp_paths);
+    return -1;
+  }
+
+  temp_paths->metadata_path = dup_path_join(temp_paths->temp_dir, "quantize-metadata.txt");
+  if (temp_paths->metadata_path == NULL) {
+    fprintf(stderr, "Failed to allocate metadata path.\n");
+    cleanup_temp_paths(temp_paths);
+    return -1;
+  }
+
+  for (int i = 0; i < SHARD_COUNT; ++i) {
+    char shard_name[32];
+    snprintf(shard_name, sizeof(shard_name), "shard-%03d.bin", i);
+    temp_paths->shard_paths[i] = dup_path_join(temp_paths->temp_dir, shard_name);
+    if (temp_paths->shard_paths[i] == NULL) {
+      fprintf(stderr, "Failed to allocate shard path.\n");
+      cleanup_temp_paths(temp_paths);
+      return -1;
+    }
+
+    if (open_shard_writers &&
+        buffered_writer_open(
+            &temp_paths->shard_writers[i],
+            temp_paths->shard_paths[i],
+            SHARD_TEXT_RECORD_ESTIMATE) != 0) {
+      cleanup_temp_paths(temp_paths);
+      return -1;
+    }
+  }
+
+  temp_paths->output_data_path = dup_path_join(temp_paths->temp_dir, "quantized-vertices.bin");
+  if (temp_paths->output_data_path == NULL) {
+    fprintf(stderr, "Failed to allocate staged output path.\n");
+    cleanup_temp_paths(temp_paths);
+    return -1;
+  }
+
+  temp_paths->shard_writers_open = open_shard_writers;
   return 0;
 }
 
@@ -776,41 +836,7 @@ static int init_temp_paths(TempPaths *temp_paths) {
     return -1;
   }
 
-  temp_paths->temp_dir = strdup(temp_template);
-  if (temp_paths->temp_dir == NULL) {
-    fprintf(stderr, "Failed to allocate temp directory path.\n");
-    cleanup_temp_paths(temp_paths);
-    return -1;
-  }
-
-  for (int i = 0; i < SHARD_COUNT; ++i) {
-    char shard_name[32];
-    snprintf(shard_name, sizeof(shard_name), "shard-%03d.bin", i);
-    temp_paths->shard_paths[i] = dup_path_join(temp_paths->temp_dir, shard_name);
-    if (temp_paths->shard_paths[i] == NULL) {
-      fprintf(stderr, "Failed to allocate shard path.\n");
-      cleanup_temp_paths(temp_paths);
-      return -1;
-    }
-
-    if (buffered_writer_open(
-            &temp_paths->shard_writers[i],
-            temp_paths->shard_paths[i],
-            SHARD_TEXT_RECORD_ESTIMATE) != 0) {
-      cleanup_temp_paths(temp_paths);
-      return -1;
-    }
-  }
-
-  temp_paths->output_data_path = dup_path_join(temp_paths->temp_dir, "quantized-vertices.bin");
-  if (temp_paths->output_data_path == NULL) {
-    fprintf(stderr, "Failed to allocate staged output path.\n");
-    cleanup_temp_paths(temp_paths);
-    return -1;
-  }
-
-  temp_paths->shard_writers_open = true;
-  return 0;
+  return configure_temp_paths(temp_paths, temp_template, true);
 }
 
 static int init_temp_paths_with_base(TempPaths *temp_paths, const char *base_dir) {
@@ -820,41 +846,17 @@ static int init_temp_paths_with_base(TempPaths *temp_paths, const char *base_dir
     return -1;
   }
 
-  temp_paths->temp_dir = strdup(base_dir);
-  if (temp_paths->temp_dir == NULL) {
-    fprintf(stderr, "Failed to allocate temp directory path.\n");
-    cleanup_temp_paths(temp_paths);
+  return configure_temp_paths(temp_paths, base_dir, true);
+}
+
+static int init_existing_temp_paths(TempPaths *temp_paths, const char *base_dir) {
+  memset(temp_paths, 0, sizeof(*temp_paths));
+
+  if (ensure_directory_exists(base_dir) != 0) {
     return -1;
   }
 
-  for (int i = 0; i < SHARD_COUNT; ++i) {
-    char shard_name[32];
-    snprintf(shard_name, sizeof(shard_name), "shard-%03d.bin", i);
-    temp_paths->shard_paths[i] = dup_path_join(temp_paths->temp_dir, shard_name);
-    if (temp_paths->shard_paths[i] == NULL) {
-      fprintf(stderr, "Failed to allocate shard path.\n");
-      cleanup_temp_paths(temp_paths);
-      return -1;
-    }
-
-    if (buffered_writer_open(
-            &temp_paths->shard_writers[i],
-            temp_paths->shard_paths[i],
-            SHARD_TEXT_RECORD_ESTIMATE) != 0) {
-      cleanup_temp_paths(temp_paths);
-      return -1;
-    }
-  }
-
-  temp_paths->output_data_path = dup_path_join(temp_paths->temp_dir, "quantized-vertices.bin");
-  if (temp_paths->output_data_path == NULL) {
-    fprintf(stderr, "Failed to allocate staged output path.\n");
-    cleanup_temp_paths(temp_paths);
-    return -1;
-  }
-
-  temp_paths->shard_writers_open = true;
-  return 0;
+  return configure_temp_paths(temp_paths, base_dir, false);
 }
 
 static int close_shard_writers(TempPaths *temp_paths) {
@@ -872,6 +874,156 @@ static int close_shard_writers(TempPaths *temp_paths) {
   return rc;
 }
 
+static int write_metadata(const QuantizeRun *run) {
+  FILE *fp = fopen(run->temp_paths.metadata_path, "wb");
+  if (fp == NULL) {
+    fprintf(stderr, "Failed to write metadata '%s': %s\n", run->temp_paths.metadata_path, strerror(errno));
+    return -1;
+  }
+
+  int rc = 0;
+  if (fprintf(
+          fp,
+          "bounds_point_count=%" PRIu64 "\n"
+          "shard_pass_point_count=%" PRIu64 "\n"
+          "sharded_point_count=%" PRIu64 "\n"
+          "min_x=%.17g\n"
+          "min_y=%.17g\n"
+          "min_z=%.17g\n"
+          "max_x=%.17g\n"
+          "max_y=%.17g\n"
+          "max_z=%.17g\n"
+          "grid_x=%u\n"
+          "grid_y=%u\n"
+          "grid_z=%u\n",
+          run->bounds_point_count,
+          run->shard_pass_point_count,
+          run->sharded_point_count,
+          run->bounds.min_x,
+          run->bounds.min_y,
+          run->bounds.min_z,
+          run->bounds.max_x,
+          run->bounds.max_y,
+          run->bounds.max_z,
+          run->scaler.grid.x,
+          run->scaler.grid.y,
+          run->scaler.grid.z) < 0) {
+    fprintf(stderr, "Failed to format metadata '%s'.\n", run->temp_paths.metadata_path);
+    rc = -1;
+  }
+
+  if (fclose(fp) != 0) {
+    fprintf(stderr, "Failed to close metadata '%s': %s\n", run->temp_paths.metadata_path, strerror(errno));
+    rc = -1;
+  }
+
+  return rc;
+}
+
+static int parse_metadata_line(
+    const char *line,
+    const char *key,
+    const char *value_format,
+    void *out_value) {
+  size_t key_len = strlen(key);
+  if (strncmp(line, key, key_len) != 0 || line[key_len] != '=') {
+    return 0;
+  }
+  return sscanf(line + key_len + 1, value_format, out_value) == 1 ? 1 : -1;
+}
+
+static int load_metadata(QuantizeRun *run) {
+  FILE *fp = fopen(run->temp_paths.metadata_path, "rb");
+  if (fp == NULL) {
+    fprintf(stderr, "Failed to open metadata '%s': %s\n", run->temp_paths.metadata_path, strerror(errno));
+    return -1;
+  }
+
+  RunMetadata metadata;
+  memset(&metadata, 0, sizeof(metadata));
+  bool saw_bounds_point_count = false;
+  bool saw_shard_pass_point_count = false;
+  bool saw_sharded_point_count = false;
+  bool saw_min_x = false;
+  bool saw_min_y = false;
+  bool saw_min_z = false;
+  bool saw_max_x = false;
+  bool saw_max_y = false;
+  bool saw_max_z = false;
+  bool saw_grid_x = false;
+  bool saw_grid_y = false;
+  bool saw_grid_z = false;
+
+  char *line = NULL;
+  size_t line_capacity = 0;
+  int rc = 0;
+
+  while (getline(&line, &line_capacity, fp) != -1) {
+    char *trimmed = trim_in_place(line);
+    if (trimmed[0] == '\0') {
+      continue;
+    }
+
+    int parsed = 0;
+    if ((parsed = parse_metadata_line(trimmed, "bounds_point_count", "%" SCNu64, &metadata.bounds_point_count)) != 0) {
+      saw_bounds_point_count = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "shard_pass_point_count", "%" SCNu64, &metadata.shard_pass_point_count)) != 0) {
+      saw_shard_pass_point_count = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "sharded_point_count", "%" SCNu64, &metadata.sharded_point_count)) != 0) {
+      saw_sharded_point_count = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "min_x", "%lf", &metadata.bounds.min_x)) != 0) {
+      saw_min_x = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "min_y", "%lf", &metadata.bounds.min_y)) != 0) {
+      saw_min_y = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "min_z", "%lf", &metadata.bounds.min_z)) != 0) {
+      saw_min_z = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "max_x", "%lf", &metadata.bounds.max_x)) != 0) {
+      saw_max_x = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "max_y", "%lf", &metadata.bounds.max_y)) != 0) {
+      saw_max_y = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "max_z", "%lf", &metadata.bounds.max_z)) != 0) {
+      saw_max_z = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "grid_x", "%u", &metadata.grid.x)) != 0) {
+      saw_grid_x = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "grid_y", "%u", &metadata.grid.y)) != 0) {
+      saw_grid_y = parsed > 0;
+    } else if ((parsed = parse_metadata_line(trimmed, "grid_z", "%u", &metadata.grid.z)) != 0) {
+      saw_grid_z = parsed > 0;
+    } else {
+      fprintf(stderr, "Unrecognized metadata line: %s\n", trimmed);
+      rc = -1;
+      break;
+    }
+
+    if (parsed < 0) {
+      fprintf(stderr, "Invalid metadata line: %s\n", trimmed);
+      rc = -1;
+      break;
+    }
+  }
+
+  free(line);
+  fclose(fp);
+
+  if (rc != 0) {
+    return -1;
+  }
+
+  if (!saw_bounds_point_count || !saw_shard_pass_point_count || !saw_sharded_point_count ||
+      !saw_min_x || !saw_min_y || !saw_min_z || !saw_max_x || !saw_max_y || !saw_max_z ||
+      !saw_grid_x || !saw_grid_y || !saw_grid_z) {
+    fprintf(stderr, "Metadata file is incomplete: %s\n", run->temp_paths.metadata_path);
+    return -1;
+  }
+
+  run->bounds = metadata.bounds;
+  run->bounds_point_count = metadata.bounds_point_count;
+  run->shard_pass_point_count = metadata.shard_pass_point_count;
+  run->sharded_point_count = metadata.sharded_point_count;
+  run->scaler = build_scaler(&metadata.bounds, metadata.grid);
+  return 0;
+}
+
 static void quantize_run_init(QuantizeRun *run, const QuantizeOptions *options) {
   memset(run, 0, sizeof(*run));
   run->options = *options;
@@ -880,7 +1032,7 @@ static void quantize_run_init(QuantizeRun *run, const QuantizeOptions *options) 
 }
 
 static uint64_t actual_input_point_count(const QuantizeRun *run) {
-  if (!should_run_stage(run, QUANTIZE_STAGE_SHARD)) {
+  if (run->shard_pass_point_count == 0) {
     return run->bounds_point_count;
   }
   return run->bounds_point_count < run->shard_pass_point_count
@@ -897,8 +1049,12 @@ static int prepare_paths(const QuantizeRun *run) {
     fprintf(stderr, "Cannot read '%s': %s\n", run->options.input_path, strerror(errno));
     return -1;
   }
-  if (should_run_stage(run, QUANTIZE_STAGE_WRITE)) {
-    return ensure_parent_dir(run->options.output_path);
+  if (ensure_parent_dir(run->options.output_path) != 0) {
+    return -1;
+  }
+  if (run->options.start_stage != QUANTIZE_START_BOUNDS && run->options.temp_dir_path == NULL) {
+    fprintf(stderr, "--temp-dir is required when --steps starts at shard or reduce.\n");
+    return -1;
   }
   return 0;
 }
@@ -1041,24 +1197,6 @@ static int write_output(QuantizeRun *run) {
   return 0;
 }
 
-static int finish_without_output(const QuantizeRun *run, const char *message) {
-  printf("%s\n", message);
-  if (should_run_stage(run, QUANTIZE_STAGE_BOUNDS)) {
-    print_stage_duration("Bounds scan", run->bounds_seconds);
-  }
-  if (should_run_stage(run, QUANTIZE_STAGE_SHARD)) {
-    print_stage_duration("Shard points", run->shard_seconds);
-  }
-  if (should_run_stage(run, QUANTIZE_STAGE_REDUCE)) {
-    print_stage_duration("Reduce shards", run->reduce_seconds);
-  }
-  print_timing_summary(
-      now_seconds() - run->total_started_at,
-      actual_input_point_count(run),
-      run->header.vertex_count);
-  return 0;
-}
-
 static int write_empty_result(
     const QuantizeRun *run,
     const char *message,
@@ -1089,8 +1227,13 @@ static void print_success_summary(const QuantizeRun *run) {
       run->output_point_count);
   printf("Target size: %d\" x %d\" x %d\"\n", SIZE_X_IN, SIZE_Y_IN, SIZE_Z_IN);
   printf("Target DPI: %d x %d x %d\n", DPI_X, DPI_Y, DPI_Z);
-  print_stage_duration("Bounds scan", run->bounds_seconds);
-  print_stage_duration("Shard points", run->shard_seconds);
+
+  if (run->options.start_stage == QUANTIZE_START_BOUNDS) {
+    print_stage_duration("Bounds scan", run->bounds_seconds);
+  }
+  if (run->options.start_stage <= QUANTIZE_START_SHARD) {
+    print_stage_duration("Shard points", run->shard_seconds);
+  }
   print_stage_duration("Reduce shards", run->reduce_seconds);
   print_stage_duration("Write output", run->write_seconds);
   print_timing_summary(
@@ -1116,73 +1259,70 @@ int run_quantize(const QuantizeOptions *options) {
     goto cleanup;
   }
   if (run.header.vertex_count == 0) {
-    if (should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
-      rc = write_empty_result(
-          &run,
-          "Input has no vertices. Wrote an empty quantized PLY.",
-          false,
-          false);
-    } else {
-      rc = finish_without_output(&run, "Input has no vertices. No output written.");
-    }
+    rc = write_empty_result(
+        &run,
+        "Input has no vertices. Wrote an empty quantized PLY.",
+        false,
+        false);
     goto cleanup;
   }
 
-  if (scan_bounds(&run) != 0) {
-    goto cleanup;
-  }
-  if (!bounds_are_valid(&run.bounds)) {
-    if (should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
+  if (should_start_from(&run, QUANTIZE_START_BOUNDS)) {
+    if (scan_bounds(&run) != 0) {
+      goto cleanup;
+    }
+    if (!bounds_are_valid(&run.bounds)) {
       rc = write_empty_result(
           &run,
           "Input had no valid numeric vertices. Wrote an empty quantized PLY.",
           true,
           false);
-    } else {
-      rc = finish_without_output(
-          &run,
-          "Input had no valid numeric vertices. No output written.");
+      goto cleanup;
     }
-    goto cleanup;
-  }
-  if (!should_run_stage(&run, QUANTIZE_STAGE_SHARD)) {
-    rc = finish_without_output(&run, "Stopped after bounds scan.");
-    goto cleanup;
+
+    run.scaler = build_scaler(&run.bounds, build_default_grid());
+    if ((run.options.temp_dir_path != NULL
+             ? init_temp_paths_with_base(&run.temp_paths, run.options.temp_dir_path)
+             : init_temp_paths(&run.temp_paths)) != 0) {
+      goto cleanup;
+    }
+  } else if (should_start_from(&run, QUANTIZE_START_SHARD)) {
+    if (init_temp_paths_with_base(&run.temp_paths, run.options.temp_dir_path) != 0) {
+      goto cleanup;
+    }
+    if (load_metadata(&run) != 0) {
+      goto cleanup;
+    }
+  } else {
+    if (init_existing_temp_paths(&run.temp_paths, run.options.temp_dir_path) != 0) {
+      goto cleanup;
+    }
+    if (load_metadata(&run) != 0) {
+      goto cleanup;
+    }
   }
 
-  run.scaler = build_scaler(&run.bounds, build_default_grid());
-  if ((run.options.temp_dir_path != NULL
-           ? init_temp_paths_with_base(&run.temp_paths, run.options.temp_dir_path)
-           : init_temp_paths(&run.temp_paths)) != 0) {
-    goto cleanup;
-  }
-  if (shard_vertices(&run) != 0) {
-    goto cleanup;
-  }
-  if (run.sharded_point_count == 0) {
-    if (should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
+  if (run.options.start_stage <= QUANTIZE_START_SHARD) {
+    if (shard_vertices(&run) != 0) {
+      goto cleanup;
+    }
+    if (run.sharded_point_count == 0) {
       rc = write_empty_result(
           &run,
           "Input had no valid numeric vertices to quantize. Wrote an empty PLY.",
-          true,
+          run.options.start_stage == QUANTIZE_START_BOUNDS,
           true);
-    } else {
-      rc = finish_without_output(
-          &run,
-          "Input had no valid numeric vertices to quantize. No output written.");
+      goto cleanup;
     }
-    goto cleanup;
-  }
-  if (!should_run_stage(&run, QUANTIZE_STAGE_REDUCE)) {
-    rc = finish_without_output(&run, "Stopped after sharding points.");
+    if (write_metadata(&run) != 0) {
+      goto cleanup;
+    }
+  } else if (run.sharded_point_count == 0) {
+    fprintf(stderr, "Metadata does not describe any sharded points to reduce.\n");
     goto cleanup;
   }
 
   if (reduce_shards_to_staging(&run) != 0) {
-    goto cleanup;
-  }
-  if (!should_run_stage(&run, QUANTIZE_STAGE_WRITE)) {
-    rc = finish_without_output(&run, "Stopped after reducing shards.");
     goto cleanup;
   }
   if (verify_staged_output(&run) != 0) {

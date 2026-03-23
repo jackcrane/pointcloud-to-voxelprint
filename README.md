@@ -171,7 +171,7 @@ make quantize
 Command:
 
 ```bash
-./quantize [--log-interval 10000000] [--steps bounds[,shard[,reduce[,write]]]] <input.ply> <output.ply>
+./quantize [--log-interval 10000000] [--temp-dir DIR] [--steps bounds,shard,reduce|shard,reduce|reduce] <input.ply> <output.ply>
 ```
 
 Example:
@@ -183,8 +183,9 @@ Example:
 Partial-run examples:
 
 ```bash
-./quantize --steps bounds data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
-./quantize --steps bounds,shard,reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./quantize --temp-dir ./quantize-cache data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./quantize --temp-dir ./quantize-cache --steps shard,reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./quantize --temp-dir ./quantize-cache --steps reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
 ```
 
 What [`quantize.c`](./quantize.c) does:
@@ -200,19 +201,21 @@ What [`quantize.c`](./quantize.c) does:
 Important behaviors:
 
 - input and output paths must differ
-- the output directory is created if missing when the `write` step is enabled
-- temporary working files are created in the current working directory and retained after the run; the binary prints the temp directory path before exit
+- the output directory is created if missing
+- temporary working files are retained after the run; the binary prints the temp directory path before exit
+- `--temp-dir DIR` tells the binary exactly where to store or reuse shard files, staged output, and quantizer metadata
+- if `--temp-dir` is omitted, the binary creates a fresh retained temp directory under the current working directory
 - retained shard files are plain text records with `cell_id x y z r g b a packed_color`
+- retained metadata is written to `quantize-metadata.txt` inside the temp directory
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
 - periodic progress logs are emitted every `10,000,000` records by default; use `--log-interval N` to change that or `--log-interval 0` to disable them
-- `--steps` defaults to `bounds,shard,reduce,write`
-- `--steps` only accepts a prefix of the full pipeline:
-  `bounds`, `bounds,shard`, `bounds,shard,reduce`, or `bounds,shard,reduce,write`
-- when `write` is omitted, the run stops after the requested stage and prints a partial summary instead of writing the final output PLY
-- `--steps bounds` is useful for validating parseability and measuring the bounds scan only
-- `--steps bounds,shard,reduce` is useful for producing staged quantized data and timing the full reduction path without writing the final PLY
+- `--steps` always writes the final output when applicable
+- `--steps bounds,shard,reduce` is the default full run
+- `--steps shard,reduce` reuses bounds metadata from `--temp-dir`, reruns sharding, then reduces and writes
+- `--steps reduce` reuses existing shard files plus metadata from `--temp-dir`, then reduces and writes
+- `--temp-dir` is required when `--steps` starts at `shard` or `reduce`
 
 Current implementation characteristics:
 
