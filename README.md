@@ -203,18 +203,17 @@ Important behaviors:
 - input and output paths must differ
 - the output directory is created if missing
 - temporary working files are retained after the run; the binary prints the temp directory path before exit
-- `--temp-dir DIR` tells the binary exactly where to store or reuse shard files, staged output, and quantizer metadata
+- `--temp-dir DIR` tells the binary exactly where to store or reuse shard files and staged output
 - if `--temp-dir` is omitted, the binary creates a fresh retained temp directory under the current working directory
 - retained shard files are plain text records with `cell_id x y z r g b a packed_color`
-- retained metadata is written to `quantize-metadata.txt` inside the temp directory
 - if the input contains no usable numeric vertices, the script writes an empty PLY
 - output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead
 - periodic progress logs are emitted every `10,000,000` records by default; use `--log-interval N` to change that or `--log-interval 0` to disable them
 - `--steps` always writes the final output when applicable
 - `--steps bounds,shard,reduce` is the default full run
-- `--steps shard,reduce` reuses bounds metadata from `--temp-dir`, reruns sharding, then reduces and writes
-- `--steps reduce` reuses existing shard files plus metadata from `--temp-dir`, then reduces and writes
+- `--steps shard,reduce` rescans bounds from the input, reruns sharding into `--temp-dir`, then reduces and writes
+- `--steps reduce` reuses existing shard files from `--temp-dir`, then reduces and writes
 - `--temp-dir` is required when `--steps` starts at `shard` or `reduce`
 
 Current implementation characteristics:

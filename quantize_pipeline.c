@@ -25,6 +25,9 @@ typedef struct {
 
 typedef struct {
   uint64_t cell_id;
+  float x;
+  float y;
+  float z;
   uint32_t color;
 } ShardRecord;
 
@@ -40,7 +43,6 @@ typedef struct {
 
 typedef struct {
   char *temp_dir;
-  char *metadata_path;
   char *output_data_path;
   char *shard_paths[SHARD_COUNT];
   BufferedWriter shard_writers[SHARD_COUNT];
@@ -63,14 +65,6 @@ typedef struct {
   double reduce_seconds;
   double write_seconds;
 } QuantizeRun;
-
-typedef struct {
-  Bounds bounds;
-  Grid grid;
-  uint64_t bounds_point_count;
-  uint64_t shard_pass_point_count;
-  uint64_t sharded_point_count;
-} RunMetadata;
 
 static bool should_start_from(const QuantizeRun *run, QuantizeStartStage stage) {
   return run->options.start_stage == stage;
@@ -374,7 +368,13 @@ static int compare_shard_records(const void *lhs_ptr, const void *rhs_ptr) {
   return 0;
 }
 
-static int parse_shard_record_line(const char *line, uint64_t *cell_id_out, uint32_t *color_out) {
+static int parse_shard_record_line(
+    const char *line,
+    uint64_t *cell_id_out,
+    float *x_out,
+    float *y_out,
+    float *z_out,
+    uint32_t *color_out) {
   errno = 0;
   char *end = NULL;
   unsigned long long cell_id = strtoull(line, &end, 10);
@@ -382,7 +382,8 @@ static int parse_shard_record_line(const char *line, uint64_t *cell_id_out, uint
     return -1;
   }
 
-  for (int field = 0; field < 7; ++field) {
+  float coords[3];
+  for (int i = 0; i < 3; ++i) {
     while (*end != '\0' && isspace((unsigned char)*end)) {
       end++;
     }
@@ -392,11 +393,25 @@ static int parse_shard_record_line(const char *line, uint64_t *cell_id_out, uint
 
     errno = 0;
     char *next = NULL;
-    if (field < 3) {
-      (void)strtod(end, &next);
-    } else {
-      (void)strtoull(end, &next, 10);
+    double value = strtod(end, &next);
+    if (errno != 0 || next == end || !isfinite(value)) {
+      return -1;
     }
+    coords[i] = (float)value;
+    end = next;
+  }
+
+  for (int i = 0; i < 4; ++i) {
+    while (*end != '\0' && isspace((unsigned char)*end)) {
+      end++;
+    }
+    if (*end == '\0') {
+      return -1;
+    }
+
+    errno = 0;
+    char *next = NULL;
+    (void)strtoull(end, &next, 10);
     if (errno != 0 || next == end) {
       return -1;
     }
@@ -425,16 +440,21 @@ static int parse_shard_record_line(const char *line, uint64_t *cell_id_out, uint
   }
 
   *cell_id_out = (uint64_t)cell_id;
+  *x_out = coords[0];
+  *y_out = coords[1];
+  *z_out = coords[2];
   *color_out = (uint32_t)color;
   return 0;
 }
 
 static int reduce_shard(
     const char *shard_path,
-    const Scaler *scaler,
     BufferedWriter *output_writer,
     ProgressLogger *progress,
-    uint64_t *output_point_count) {
+    uint64_t *output_point_count,
+    uint64_t *input_record_count_out) {
+  *input_record_count_out = 0;
+
   struct stat stat_buf;
   if (stat(shard_path, &stat_buf) != 0) {
     fprintf(stderr, "Failed to stat shard '%s': %s\n", shard_path, strerror(errno));
@@ -478,8 +498,11 @@ static int reduce_shard(
     }
 
     uint64_t cell_id = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
     uint32_t color = 0;
-    if (parse_shard_record_line(trimmed, &cell_id, &color) != 0) {
+    if (parse_shard_record_line(trimmed, &cell_id, &x, &y, &z, &color) != 0) {
       fprintf(stderr, "Corrupt shard file: %s\n", shard_path);
       rc = -1;
       break;
@@ -505,6 +528,9 @@ static int reduce_shard(
     }
 
     records[record_count].cell_id = cell_id;
+    records[record_count].x = x;
+    records[record_count].y = y;
+    records[record_count].z = z;
     records[record_count].color = color;
     record_count++;
     progress_logger_maybe_log(progress, record_count);
@@ -512,6 +538,7 @@ static int reduce_shard(
 
   free(line);
   fclose(fp);
+  *input_record_count_out = record_count;
 
   if (rc != 0) {
     free(records);
@@ -523,6 +550,9 @@ static int reduce_shard(
   uint64_t index = 0;
   while (index < record_count) {
     uint64_t cell_id = records[index].cell_id;
+    float x = records[index].x;
+    float y = records[index].y;
+    float z = records[index].z;
     uint32_t best_color = records[index].color;
     uint64_t best_count = 0;
 
@@ -542,9 +572,7 @@ static int reduce_shard(
       }
     }
 
-    float x, y, z;
     uint8_t r, g, b, a;
-    decode_cell_center(scaler, cell_id, &x, &y, &z);
     unpack_color(best_color, &r, &g, &b, &a);
     if (buffered_writer_append_output(output_writer, x, y, z, r, g, b, a) != 0) {
       free(records);
@@ -715,8 +743,6 @@ static void cleanup_temp_paths(TempPaths *temp_paths) {
 
   free(temp_paths->output_data_path);
   temp_paths->output_data_path = NULL;
-  free(temp_paths->metadata_path);
-  temp_paths->metadata_path = NULL;
 
   for (int i = 0; i < SHARD_COUNT; ++i) {
     free(temp_paths->shard_paths[i]);
@@ -758,13 +784,6 @@ static int configure_temp_paths(
   temp_paths->temp_dir = strdup(base_dir);
   if (temp_paths->temp_dir == NULL) {
     fprintf(stderr, "Failed to allocate temp directory path.\n");
-    cleanup_temp_paths(temp_paths);
-    return -1;
-  }
-
-  temp_paths->metadata_path = dup_path_join(temp_paths->temp_dir, "quantize-metadata.txt");
-  if (temp_paths->metadata_path == NULL) {
-    fprintf(stderr, "Failed to allocate metadata path.\n");
     cleanup_temp_paths(temp_paths);
     return -1;
   }
@@ -874,156 +893,6 @@ static int close_shard_writers(TempPaths *temp_paths) {
   return rc;
 }
 
-static int write_metadata(const QuantizeRun *run) {
-  FILE *fp = fopen(run->temp_paths.metadata_path, "wb");
-  if (fp == NULL) {
-    fprintf(stderr, "Failed to write metadata '%s': %s\n", run->temp_paths.metadata_path, strerror(errno));
-    return -1;
-  }
-
-  int rc = 0;
-  if (fprintf(
-          fp,
-          "bounds_point_count=%" PRIu64 "\n"
-          "shard_pass_point_count=%" PRIu64 "\n"
-          "sharded_point_count=%" PRIu64 "\n"
-          "min_x=%.17g\n"
-          "min_y=%.17g\n"
-          "min_z=%.17g\n"
-          "max_x=%.17g\n"
-          "max_y=%.17g\n"
-          "max_z=%.17g\n"
-          "grid_x=%u\n"
-          "grid_y=%u\n"
-          "grid_z=%u\n",
-          run->bounds_point_count,
-          run->shard_pass_point_count,
-          run->sharded_point_count,
-          run->bounds.min_x,
-          run->bounds.min_y,
-          run->bounds.min_z,
-          run->bounds.max_x,
-          run->bounds.max_y,
-          run->bounds.max_z,
-          run->scaler.grid.x,
-          run->scaler.grid.y,
-          run->scaler.grid.z) < 0) {
-    fprintf(stderr, "Failed to format metadata '%s'.\n", run->temp_paths.metadata_path);
-    rc = -1;
-  }
-
-  if (fclose(fp) != 0) {
-    fprintf(stderr, "Failed to close metadata '%s': %s\n", run->temp_paths.metadata_path, strerror(errno));
-    rc = -1;
-  }
-
-  return rc;
-}
-
-static int parse_metadata_line(
-    const char *line,
-    const char *key,
-    const char *value_format,
-    void *out_value) {
-  size_t key_len = strlen(key);
-  if (strncmp(line, key, key_len) != 0 || line[key_len] != '=') {
-    return 0;
-  }
-  return sscanf(line + key_len + 1, value_format, out_value) == 1 ? 1 : -1;
-}
-
-static int load_metadata(QuantizeRun *run) {
-  FILE *fp = fopen(run->temp_paths.metadata_path, "rb");
-  if (fp == NULL) {
-    fprintf(stderr, "Failed to open metadata '%s': %s\n", run->temp_paths.metadata_path, strerror(errno));
-    return -1;
-  }
-
-  RunMetadata metadata;
-  memset(&metadata, 0, sizeof(metadata));
-  bool saw_bounds_point_count = false;
-  bool saw_shard_pass_point_count = false;
-  bool saw_sharded_point_count = false;
-  bool saw_min_x = false;
-  bool saw_min_y = false;
-  bool saw_min_z = false;
-  bool saw_max_x = false;
-  bool saw_max_y = false;
-  bool saw_max_z = false;
-  bool saw_grid_x = false;
-  bool saw_grid_y = false;
-  bool saw_grid_z = false;
-
-  char *line = NULL;
-  size_t line_capacity = 0;
-  int rc = 0;
-
-  while (getline(&line, &line_capacity, fp) != -1) {
-    char *trimmed = trim_in_place(line);
-    if (trimmed[0] == '\0') {
-      continue;
-    }
-
-    int parsed = 0;
-    if ((parsed = parse_metadata_line(trimmed, "bounds_point_count", "%" SCNu64, &metadata.bounds_point_count)) != 0) {
-      saw_bounds_point_count = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "shard_pass_point_count", "%" SCNu64, &metadata.shard_pass_point_count)) != 0) {
-      saw_shard_pass_point_count = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "sharded_point_count", "%" SCNu64, &metadata.sharded_point_count)) != 0) {
-      saw_sharded_point_count = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "min_x", "%lf", &metadata.bounds.min_x)) != 0) {
-      saw_min_x = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "min_y", "%lf", &metadata.bounds.min_y)) != 0) {
-      saw_min_y = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "min_z", "%lf", &metadata.bounds.min_z)) != 0) {
-      saw_min_z = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "max_x", "%lf", &metadata.bounds.max_x)) != 0) {
-      saw_max_x = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "max_y", "%lf", &metadata.bounds.max_y)) != 0) {
-      saw_max_y = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "max_z", "%lf", &metadata.bounds.max_z)) != 0) {
-      saw_max_z = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "grid_x", "%u", &metadata.grid.x)) != 0) {
-      saw_grid_x = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "grid_y", "%u", &metadata.grid.y)) != 0) {
-      saw_grid_y = parsed > 0;
-    } else if ((parsed = parse_metadata_line(trimmed, "grid_z", "%u", &metadata.grid.z)) != 0) {
-      saw_grid_z = parsed > 0;
-    } else {
-      fprintf(stderr, "Unrecognized metadata line: %s\n", trimmed);
-      rc = -1;
-      break;
-    }
-
-    if (parsed < 0) {
-      fprintf(stderr, "Invalid metadata line: %s\n", trimmed);
-      rc = -1;
-      break;
-    }
-  }
-
-  free(line);
-  fclose(fp);
-
-  if (rc != 0) {
-    return -1;
-  }
-
-  if (!saw_bounds_point_count || !saw_shard_pass_point_count || !saw_sharded_point_count ||
-      !saw_min_x || !saw_min_y || !saw_min_z || !saw_max_x || !saw_max_y || !saw_max_z ||
-      !saw_grid_x || !saw_grid_y || !saw_grid_z) {
-    fprintf(stderr, "Metadata file is incomplete: %s\n", run->temp_paths.metadata_path);
-    return -1;
-  }
-
-  run->bounds = metadata.bounds;
-  run->bounds_point_count = metadata.bounds_point_count;
-  run->shard_pass_point_count = metadata.shard_pass_point_count;
-  run->sharded_point_count = metadata.sharded_point_count;
-  run->scaler = build_scaler(&metadata.bounds, metadata.grid);
-  return 0;
-}
-
 static void quantize_run_init(QuantizeRun *run, const QuantizeOptions *options) {
   memset(run, 0, sizeof(*run));
   run->options = *options;
@@ -1033,7 +902,10 @@ static void quantize_run_init(QuantizeRun *run, const QuantizeOptions *options) 
 
 static uint64_t actual_input_point_count(const QuantizeRun *run) {
   if (run->shard_pass_point_count == 0) {
-    return run->bounds_point_count;
+    if (run->bounds_point_count > 0) {
+      return run->bounds_point_count;
+    }
+    return run->sharded_point_count;
   }
   return run->bounds_point_count < run->shard_pass_point_count
       ? run->bounds_point_count
@@ -1084,6 +956,22 @@ static int scan_bounds(QuantizeRun *run) {
   return 0;
 }
 
+static int prepare_resume_from_shard(QuantizeRun *run) {
+  if (scan_bounds(run) != 0) {
+    return -1;
+  }
+  if (!bounds_are_valid(&run->bounds)) {
+    fprintf(stderr, "Input had no valid numeric vertices to quantize.\n");
+    return -1;
+  }
+
+  run->scaler = build_scaler(&run->bounds, build_default_grid());
+  if (init_temp_paths_with_base(&run->temp_paths, run->options.temp_dir_path) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
 static int shard_vertices(QuantizeRun *run) {
   ShardPassContext shard_ctx = {
       .scaler = &run->scaler,
@@ -1121,6 +1009,7 @@ static int reduce_shards_to_staging(QuantizeRun *run) {
   BufferedWriter output_writer;
   ProgressLogger progress;
   double started_at = now_seconds();
+  uint64_t reduced_input_record_count = 0;
 
   if (buffered_writer_open(&output_writer, run->temp_paths.output_data_path, OUTPUT_RECORD_BYTES) != 0) {
     return -1;
@@ -1133,20 +1022,25 @@ static int reduce_shards_to_staging(QuantizeRun *run) {
       run->options.log_interval,
       started_at);
   for (int i = 0; i < SHARD_COUNT; ++i) {
+    uint64_t shard_input_record_count = 0;
     if (reduce_shard(
             run->temp_paths.shard_paths[i],
-            &run->scaler,
             &output_writer,
             &progress,
-            &run->output_point_count) != 0) {
+            &run->output_point_count,
+            &shard_input_record_count) != 0) {
       buffered_writer_close(&output_writer);
       return -1;
     }
+    reduced_input_record_count += shard_input_record_count;
   }
   if (buffered_writer_close(&output_writer) != 0) {
     return -1;
   }
 
+  if (run->options.start_stage == QUANTIZE_START_REDUCE || run->sharded_point_count == 0) {
+    run->sharded_point_count = reduced_input_record_count;
+  }
   run->reduce_seconds = now_seconds() - started_at;
   return 0;
 }
@@ -1287,19 +1181,14 @@ int run_quantize(const QuantizeOptions *options) {
       goto cleanup;
     }
   } else if (should_start_from(&run, QUANTIZE_START_SHARD)) {
-    if (init_temp_paths_with_base(&run.temp_paths, run.options.temp_dir_path) != 0) {
-      goto cleanup;
-    }
-    if (load_metadata(&run) != 0) {
+    if (prepare_resume_from_shard(&run) != 0) {
       goto cleanup;
     }
   } else {
     if (init_existing_temp_paths(&run.temp_paths, run.options.temp_dir_path) != 0) {
       goto cleanup;
     }
-    if (load_metadata(&run) != 0) {
-      goto cleanup;
-    }
+    run.sharded_point_count = 0;
   }
 
   if (run.options.start_stage <= QUANTIZE_START_SHARD) {
@@ -1314,12 +1203,6 @@ int run_quantize(const QuantizeOptions *options) {
           true);
       goto cleanup;
     }
-    if (write_metadata(&run) != 0) {
-      goto cleanup;
-    }
-  } else if (run.sharded_point_count == 0) {
-    fprintf(stderr, "Metadata does not describe any sharded points to reduce.\n");
-    goto cleanup;
   }
 
   if (reduce_shards_to_staging(&run) != 0) {
