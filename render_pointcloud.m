@@ -1,78 +1,76 @@
-% render_two_ply_equal_scale.m
+% render_single_ply_equal_scale.m
 
 clear; clc;
 
-files = {
-    'ozark_first_1m.ply', 'ozark_first_1m';
-    'oz_fm.ply',          'oz_fm';
-};
-
 maxPoints = 5e6;
-data = cell(2,1);
 
-%% ---------- LOAD ----------
-for f = 1:2
-    fid = fopen(files{f,1}, 'r');
-    if fid == -1
-        error('Cannot open file: %s', files{f,1});
-    end
+%% ---------- FILE PICKER ----------
+[fileName, filePath] = uigetfile('*.ply', 'Select a PLY point cloud');
 
-    numPoints = 0;
-    properties = {};
-
-    while true
-        line = strtrim(fgetl(fid));
-
-        if contains(line,'element vertex')
-            numPoints = sscanf(line,'element vertex %d');
-        end
-
-        if startsWith(line,'property')
-            properties{end+1} = line; %#ok<SAGROW>
-        end
-
-        if strcmp(line,'end_header')
-            break;
-        end
-    end
-
-    has16 = any(contains(properties,'uint16 red'));
-    has8  = any(contains(properties,'uchar red'));
-
-    if has16
-        raw = textscan(fid, repmat('%f',1,20), numPoints);
-        X = raw{1}; Y = raw{2}; Z = raw{3};
-        R = raw{18}/65535; G = raw{19}/65535; B = raw{20}/65535;
-
-    elseif has8
-        raw = textscan(fid, '%f %f %f %f %f %f %f', numPoints);
-        X = raw{1}; Y = raw{2}; Z = raw{3};
-        R = raw{4}/255; G = raw{5}/255; B = raw{6}/255;
-
-    else
-        error('Unsupported PLY format');
-    end
-
-    fclose(fid);
-
-    % Downsample
-    if numel(X) > maxPoints
-        idx = randperm(numel(X), maxPoints);
-        X = X(idx); Y = Y(idx); Z = Z(idx);
-        R = R(idx); G = G(idx); B = B(idx);
-    end
-
-    data{f} = struct('X',X,'Y',Y,'Z',Z,'C',[R G B]);
+if isequal(fileName,0)
+    error('No file selected.');
 end
 
-%% ---------- GLOBAL AXIS (KEY FIX) ----------
-allX = [data{1}.X; data{2}.X];
-allY = [data{1}.Y; data{2}.Y];
-allZ = [data{1}.Z; data{2}.Z];
+fullFile = fullfile(filePath, fileName);
 
-xmin = min(allX); xmax = max(allX);
-ymin = min(allY); ymax = max(allY);
-zmin = min(allZ); zmax = max(allZ);
+%% ---------- LOAD ----------
+fid = fopen(fullFile, 'r');
+if fid == -1
+    error('Cannot open file: %s', fullFile);
+end
+
+numPoints = 0;
+properties = {};
+
+while true
+    line = strtrim(fgetl(fid));
+
+    if contains(line,'element vertex')
+        numPoints = sscanf(line,'element vertex %d');
+    end
+
+    if startsWith(line,'property')
+        properties{end+1} = line; %#ok<SAGROW>
+    end
+
+    if strcmp(line,'end_header')
+        break;
+    end
+end
+
+has16 = any(contains(properties,'uint16 red')) || ...
+        any(contains(properties,'ushort red'));
+
+has8  = any(contains(properties,'uchar red')) || ...
+        any(contains(properties,'uint8 red'));
+
+if has16
+    raw = textscan(fid, '%f %f %f %f %f %f');
+    X = raw{1}; Y = raw{2}; Z = raw{3};
+    R = raw{4}/65535; G = raw{5}/65535; B = raw{6}/65535;
+
+elseif has8
+    raw = textscan(fid, '%f %f %f %f %f %f');
+    X = raw{1}; Y = raw{2}; Z = raw{3};
+    R = raw{4}/255; G = raw{5}/255; B = raw{6}/255;
+
+else
+    error('Unsupported PLY format');
+end
+
+fclose(fid);
+
+%% ---------- DOWNSAMPLE ----------
+if numel(X) > maxPoints
+    idx = randperm(numel(X), maxPoints);
+    X = X(idx); Y = Y(idx); Z = Z(idx);
+    R = R(idx); G = G(idx); B = B(idx);
+end
+
+%% ---------- GLOBAL AXIS (CUBE SCALING) ----------
+xmin = min(X); xmax = max(X);
+ymin = min(Y); ymax = max(Y);
+zmin = min(Z); zmax = max(Z);
 
 % Prevent flat Z
 if zmax == zmin
@@ -80,7 +78,6 @@ if zmax == zmin
     zmax = zmax + 1;
 end
 
-% Make cube (critical for equal visual size)
 dx = xmax - xmin;
 dy = ymax - ymin;
 dz = zmax - zmin;
@@ -96,30 +93,22 @@ zlim_global = cz + [-d/2 d/2];
 
 %% ---------- RENDER ----------
 figure('Color','w');
+ax = axes;
 
-tiledlayout(1,2,'TileSpacing','none','Padding','none');
+scatter3(ax, X, Y, Z, 1, [R G B], '.');
+title(ax, fileName, 'Interpreter', 'none');
 
-for i = 1:2
-    ax = nexttile;
+xlim(ax, xlim_global);
+ylim(ax, ylim_global);
+zlim(ax, zlim_global);
 
-    d = data{i};
+axis(ax,'equal');
+axis(ax,'vis3d');
+set(ax,'PlotBoxAspectRatio',[1 1 1]);
 
-    scatter3(ax, d.X, d.Y, d.Z, 1, d.C, '.');
-    title(ax, files{i,2});
+grid(ax,'on');
+view(ax,3);
 
-    % FORCE IDENTICAL SCALE
-    xlim(ax, xlim_global);
-    ylim(ax, ylim_global);
-    zlim(ax, zlim_global);
-
-    axis(ax,'equal');
-    axis(ax,'vis3d');
-    set(ax,'PlotBoxAspectRatio',[1 1 1]);
-
-    grid(ax,'on');
-    view(ax,3);
-
-    xlabel(ax,'X'); ylabel(ax,'Y'); zlabel(ax,'Z');
-end
+xlabel(ax,'X'); ylabel(ax,'Y'); zlabel(ax,'Z');
 
 rotate3d on;
