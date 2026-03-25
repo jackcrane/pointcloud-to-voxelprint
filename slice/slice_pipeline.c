@@ -591,7 +591,13 @@ static int parse_ply_header(FILE *file, PlyHeader *header_out) {
 
     PlyProperty *property = &header.properties[header.property_count];
     memset(property, 0, sizeof(*property));
-    strncpy(property->name, property_name, sizeof(property->name) - 1);
+    const size_t property_name_len = strlen(property_name);
+    if (property_name_len >= sizeof(property->name)) {
+      fprintf(stderr, "PLY property name is too long: %s\n", property_name);
+      free(line);
+      return -1;
+    }
+    memcpy(property->name, property_name, property_name_len + 1);
     property->type = scalar_type;
     property->offset = header.stride;
     header.stride += ply_scalar_type_size(scalar_type);
