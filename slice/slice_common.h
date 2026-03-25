@@ -15,6 +15,7 @@
 #define SLICE_DEFAULT_VOXEL_RADIUS_INCHES 0.01
 #define SLICE_DEFAULT_PADDING_RATIO 0.0
 #define SLICE_DEFAULT_LONGEST_SIDE_IN 3.0
+#define SLICE_DEFAULT_LOG_INTERVAL UINT64_C(100000)
 
 typedef struct {
   const char *input_path;
@@ -31,6 +32,7 @@ typedef struct {
   double longest_side_in;
   double voxel_radius_inches;
   double padding_ratio;
+  uint64_t log_interval;
 } SliceOptions;
 
 typedef struct {

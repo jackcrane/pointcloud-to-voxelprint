@@ -12,6 +12,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SLICE_BACKGROUND_R 247
@@ -104,9 +105,18 @@ typedef struct {
   unsigned axes_mask;
 } SearchState;
 
+typedef struct {
+  const char *label;
+  uint64_t total;
+  uint64_t interval;
+  uint64_t next_log;
+  uint64_t last_logged;
+  double started_at;
+} SliceProgressLogger;
+
 static int ensure_input_file(const char *path);
 static int mkdir_recursive(const char *path);
-static int load_ply(const char *path, PointCloud *cloud_out);
+static int load_ply(const char *path, uint64_t log_interval, PointCloud *cloud_out);
 static void free_point_cloud(PointCloud *cloud);
 static int init_image(Image *image, uint32_t width, uint32_t height);
 static void free_image(Image *image);
@@ -138,6 +148,18 @@ static double read_scalar_binary(const uint8_t *record, size_t offset, PlyScalar
 static uint8_t normalize_color_value(double value, PlyScalarType type);
 static bool trim_line(char *line);
 static int parse_ply_header(FILE *file, PlyHeader *header_out);
+static double slice_now_seconds(void);
+static const char *slice_format_duration(double total_seconds, char *buffer, size_t buffer_size);
+static void slice_progress_logger_init(
+    SliceProgressLogger *progress,
+    const char *label,
+    uint64_t total,
+    uint64_t interval,
+    double started_at);
+static void slice_progress_logger_log(
+    SliceProgressLogger *progress,
+    uint64_t processed,
+    bool force);
 
 static void update_progress(size_t layer_index, size_t depth) {
   const double percent = depth == 0 ? 100.0 : (100.0 * (double) layer_index) / (double) depth;
@@ -162,10 +184,18 @@ int run_slice(const SliceOptions *options) {
 
   PointCloud cloud;
   memset(&cloud, 0, sizeof(cloud));
-  if (load_ply(options->input_path, &cloud) != 0) {
+  const double load_started_at = slice_now_seconds();
+  if (load_ply(options->input_path, options->log_interval, &cloud) != 0) {
     free_point_cloud(&cloud);
     return -1;
   }
+  char load_elapsed[64];
+  printf(
+      "Load PLY into memory finished in %s\n",
+      slice_format_duration(
+          slice_now_seconds() - load_started_at,
+          load_elapsed,
+          sizeof(load_elapsed)));
 
   printf(
       "Bounds min=(%.6f, %.6f, %.6f) max=(%.6f, %.6f, %.6f)\n",
@@ -436,6 +466,134 @@ static bool trim_line(char *line) {
   }
 
   return line[0] != '\0';
+}
+
+static double slice_now_seconds(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+}
+
+static const char *slice_format_duration(
+    double total_seconds,
+    char *buffer,
+    size_t buffer_size) {
+  if (!isfinite(total_seconds) || total_seconds < 0.0) {
+    snprintf(buffer, buffer_size, "n/a");
+    return buffer;
+  }
+
+  long long rounded_seconds = llround(total_seconds);
+  long long days = rounded_seconds / 86400;
+  long long hours = (rounded_seconds % 86400) / 3600;
+  long long minutes = (rounded_seconds % 3600) / 60;
+  long long seconds = rounded_seconds % 60;
+
+  if (days > 0) {
+    snprintf(buffer, buffer_size, "%lldd %lldh %lldm %llds", days, hours, minutes, seconds);
+    return buffer;
+  }
+  if (hours > 0) {
+    snprintf(buffer, buffer_size, "%lldh %lldm %llds", hours, minutes, seconds);
+    return buffer;
+  }
+  if (minutes > 0) {
+    snprintf(buffer, buffer_size, "%lldm %llds", minutes, seconds);
+    return buffer;
+  }
+  if (rounded_seconds > 0) {
+    snprintf(buffer, buffer_size, "%llds", rounded_seconds);
+    return buffer;
+  }
+
+  snprintf(buffer, buffer_size, "%.1fms", total_seconds * 1000.0);
+  return buffer;
+}
+
+static void slice_progress_logger_init(
+    SliceProgressLogger *progress,
+    const char *label,
+    uint64_t total,
+    uint64_t interval,
+    double started_at) {
+  if (progress == NULL) {
+    return;
+  }
+
+  progress->label = label;
+  progress->total = total;
+  progress->interval = interval;
+  progress->next_log = interval > 0 ? interval : UINT64_MAX;
+  progress->last_logged = 0;
+  progress->started_at = started_at;
+}
+
+static void slice_progress_logger_log(
+    SliceProgressLogger *progress,
+    uint64_t processed,
+    bool force) {
+  if (progress == NULL || progress->interval == 0) {
+    return;
+  }
+  if (force && processed == progress->last_logged) {
+    return;
+  }
+  if (!force && processed < progress->next_log) {
+    return;
+  }
+
+  char elapsed[64];
+  double elapsed_seconds = slice_now_seconds() - progress->started_at;
+
+  if (progress->total > 0) {
+    double percent = ((double) processed * 100.0) / (double) progress->total;
+    char eta[64];
+    const char *eta_text = "n/a";
+    if (processed > 0 && processed < progress->total) {
+      double seconds_per_point = elapsed_seconds / (double) processed;
+      double eta_seconds = seconds_per_point * (double) (progress->total - processed);
+      eta_text = slice_format_duration(eta_seconds, eta, sizeof(eta));
+    } else if (processed >= progress->total) {
+      eta_text = slice_format_duration(0.0, eta, sizeof(eta));
+    }
+
+    printf(
+        "%s progress: %" PRIu64 "/%" PRIu64 " (%.2f%%, elapsed %s, estimated remaining %s)\n",
+        progress->label,
+        processed,
+        progress->total,
+        percent,
+        slice_format_duration(elapsed_seconds, elapsed, sizeof(elapsed)),
+        eta_text);
+  } else {
+    printf(
+        "%s progress: %" PRIu64 " points (elapsed %s)\n",
+        progress->label,
+        processed,
+        slice_format_duration(elapsed_seconds, elapsed, sizeof(elapsed)));
+  }
+
+  fflush(stdout);
+  progress->last_logged = processed;
+
+  if (force) {
+    while (progress->next_log <= processed) {
+      if (UINT64_MAX - progress->next_log < progress->interval) {
+        progress->next_log = UINT64_MAX;
+        break;
+      }
+      progress->next_log += progress->interval;
+    }
+    return;
+  }
+
+  while (progress->next_log <= processed) {
+    if (UINT64_MAX - progress->next_log < progress->interval) {
+      progress->next_log = UINT64_MAX;
+      break;
+    }
+    progress->next_log += progress->interval;
+  }
 }
 
 static PlyScalarType parse_ply_scalar_type(const char *type_name) {
@@ -732,7 +890,7 @@ static uint8_t normalize_color_value(double value, PlyScalarType type) {
   return (uint8_t) value;
 }
 
-static int load_ply(const char *path, PointCloud *cloud_out) {
+static int load_ply(const char *path, uint64_t log_interval, PointCloud *cloud_out) {
   FILE *file = fopen(path, "rb");
   if (file == NULL) {
     fprintf(stderr, "Failed to open %s: %s\n", path, strerror(errno));
@@ -764,6 +922,13 @@ static int load_ply(const char *path, PointCloud *cloud_out) {
   double max_x = -INFINITY;
   double max_y = -INFINITY;
   double max_z = -INFINITY;
+  SliceProgressLogger progress;
+  slice_progress_logger_init(
+      &progress,
+      "Load PLY into memory",
+      header.vertex_count,
+      log_interval,
+      slice_now_seconds());
 
   if (header.format == PLY_FORMAT_ASCII) {
     char *line = NULL;
@@ -819,6 +984,7 @@ static int load_ply(const char *path, PointCloud *cloud_out) {
       }
 
       points[processed++] = point;
+      slice_progress_logger_log(&progress, (uint64_t) processed, false);
 
       if (point.x < min_x) min_x = point.x;
       if (point.y < min_y) min_y = point.y;
@@ -916,6 +1082,7 @@ static int load_ply(const char *path, PointCloud *cloud_out) {
       }
 
       points[i] = point;
+      slice_progress_logger_log(&progress, i + 1, false);
 
       if (point.x < min_x) min_x = point.x;
       if (point.y < min_y) min_y = point.y;
@@ -926,6 +1093,11 @@ static int load_ply(const char *path, PointCloud *cloud_out) {
     }
 
     free(record);
+  }
+
+  if (progress.interval > 0 &&
+      (header.vertex_count % progress.interval) != 0) {
+    slice_progress_logger_log(&progress, header.vertex_count, true);
   }
 
   fclose(file);

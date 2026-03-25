@@ -1,6 +1,7 @@
 #include "slice_cli.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@ static void print_usage(const char *program_name) {
       "Usage: %s [options] <input.ply> <output_dir>\n"
       "\n"
       "Options:\n"
+      "  --log-interval N              Loader progress interval in points (default %" PRIu64 ")\n"
       "  --dpi VALUE                   XY dots per inch (default %.0f)\n"
       "  --layer-height-nm VALUE       Z layer height in nanometers (default %.0f)\n"
       "  --multiplier VALUE            Scales the default build size and voxel radius (default %.2f)\n"
@@ -33,6 +35,7 @@ static void print_usage(const char *program_name) {
       "  --padding-ratio VALUE         Fractional XY padding applied to bounds (default %.3f)\n"
       "  --help                        Show this help message\n",
       program_name,
+      SLICE_DEFAULT_LOG_INTERVAL,
       SLICE_DEFAULT_DPI,
       SLICE_DEFAULT_LAYER_HEIGHT_NM,
       SLICE_DEFAULT_MULTIPLIER,
@@ -42,6 +45,18 @@ static void print_usage(const char *program_name) {
       SLICE_DEFAULT_LONGEST_SIDE_IN,
       SLICE_DEFAULT_VOXEL_RADIUS_INCHES,
       SLICE_DEFAULT_PADDING_RATIO);
+}
+
+static bool parse_uint64_str(const char *text, uint64_t *value_out) {
+  errno = 0;
+  char *end = NULL;
+  unsigned long long value = strtoull(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0') {
+    return false;
+  }
+
+  *value_out = (uint64_t) value;
+  return true;
 }
 
 static bool parse_double_str(const char *value, double *out) {
@@ -124,6 +139,7 @@ static SliceOptions default_options(void) {
   options.voxel_radius_inches =
       SLICE_DEFAULT_VOXEL_RADIUS_INCHES * SLICE_DEFAULT_MULTIPLIER;
   options.padding_ratio = SLICE_DEFAULT_PADDING_RATIO;
+  options.log_interval = SLICE_DEFAULT_LOG_INTERVAL;
   return options;
 }
 
@@ -138,6 +154,24 @@ int parse_slice_options(int argc, char **argv, SliceOptions *options_out) {
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
       print_usage(argv[0]);
       return -1;
+    }
+
+    if (strcmp(arg, "--log-interval") == 0) {
+      if (i + 1 >= argc || !parse_uint64_str(argv[i + 1], &options.log_interval)) {
+        fprintf(stderr, "Invalid value for --log-interval.\n");
+        print_usage(argv[0]);
+        return -1;
+      }
+      ++i;
+      continue;
+    }
+    if (strncmp(arg, "--log-interval=", 15) == 0) {
+      if (!parse_uint64_str(arg + 15, &options.log_interval)) {
+        fprintf(stderr, "Invalid value for --log-interval.\n");
+        print_usage(argv[0]);
+        return -1;
+      }
+      continue;
     }
 
     if (strcmp(arg, "--dpi") == 0) {

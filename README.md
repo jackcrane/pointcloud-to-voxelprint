@@ -167,6 +167,7 @@ Operational details:
 
 Relevant flags:
 
+- `--log-interval`
 - `--dpi`
 - `--layer-height-nm`
 - `--multiplier`
