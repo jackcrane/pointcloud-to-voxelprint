@@ -114,6 +114,11 @@ typedef struct {
   double started_at;
 } SliceProgressLogger;
 
+typedef struct {
+  SliceProgressLogger progress;
+  uint64_t built_nodes;
+} KdBuildState;
+
 static int ensure_input_file(const char *path);
 static int mkdir_recursive(const char *path);
 static int load_ply(const char *path, uint64_t log_interval, PointCloud *cloud_out);
@@ -130,7 +135,7 @@ static void set_pixel(
     uint8_t b,
     uint8_t a);
 static int write_png(const char *path, const Image *image);
-static KdNode *build_kd_tree(SlicePoint *points, size_t count);
+static KdNode *build_kd_tree(SlicePoint *points, size_t count, uint64_t log_interval);
 static void free_kd_tree(KdNode *node);
 static const SlicePoint *nearest_point(
     const KdNode *root,
@@ -287,12 +292,21 @@ int run_slice(const SliceOptions *options) {
       options->voxel_radius_inches,
       voxel_radius);
 
-  KdNode *root = build_kd_tree(cloud.points, cloud.count);
+  printf("Building kd tree...\n");
+  const double kd_started_at = slice_now_seconds();
+  KdNode *root = build_kd_tree(cloud.points, cloud.count, options->log_interval);
   if (root == NULL && cloud.count > 0) {
     fprintf(stderr, "Failed to build the kd-tree.\n");
     free_point_cloud(&cloud);
     return -1;
   }
+  char kd_elapsed[64];
+  printf(
+      "Build kd tree finished in %s\n",
+      slice_format_duration(
+          slice_now_seconds() - kd_started_at,
+          kd_elapsed,
+          sizeof(kd_elapsed)));
 
   Image image;
   memset(&image, 0, sizeof(image));
@@ -1358,7 +1372,11 @@ static int compare_point_ptrs(const void *lhs, const void *rhs) {
   return 0;
 }
 
-static KdNode *build_kd_subtree(SlicePoint **point_ptrs, size_t count, int depth) {
+static KdNode *build_kd_subtree(
+    SlicePoint **point_ptrs,
+    size_t count,
+    int depth,
+    KdBuildState *state) {
   if (count == 0) {
     return NULL;
   }
@@ -1375,12 +1393,17 @@ static KdNode *build_kd_subtree(SlicePoint **point_ptrs, size_t count, int depth
 
   node->point = point_ptrs[mid];
   node->axis = axis;
-  node->left = build_kd_subtree(point_ptrs, mid, depth + 1);
-  node->right = build_kd_subtree(point_ptrs + mid + 1, count - mid - 1, depth + 1);
+  if (state != NULL) {
+    state->built_nodes += 1;
+    slice_progress_logger_log(&state->progress, state->built_nodes, false);
+  }
+  node->left = build_kd_subtree(point_ptrs, mid, depth + 1, state);
+  node->right =
+      build_kd_subtree(point_ptrs + mid + 1, count - mid - 1, depth + 1, state);
   return node;
 }
 
-static KdNode *build_kd_tree(SlicePoint *points, size_t count) {
+static KdNode *build_kd_tree(SlicePoint *points, size_t count, uint64_t log_interval) {
   if (count == 0) {
     return NULL;
   }
@@ -1394,7 +1417,20 @@ static KdNode *build_kd_tree(SlicePoint *points, size_t count) {
     point_ptrs[i] = &points[i];
   }
 
-  KdNode *root = build_kd_subtree(point_ptrs, count, 0);
+  KdBuildState state;
+  memset(&state, 0, sizeof(state));
+  slice_progress_logger_init(
+      &state.progress,
+      "Build kd tree",
+      (uint64_t) count,
+      log_interval,
+      slice_now_seconds());
+
+  KdNode *root = build_kd_subtree(point_ptrs, count, 0, &state);
+  if (state.progress.interval > 0 &&
+      ((uint64_t) count % state.progress.interval) != 0) {
+    slice_progress_logger_log(&state.progress, state.built_nodes, true);
+  }
   free(point_ptrs);
   return root;
 }

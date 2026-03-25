@@ -23,7 +23,7 @@ static void print_usage(const char *program_name) {
       "Usage: %s [options] <input.ply> <output_dir>\n"
       "\n"
       "Options:\n"
-      "  --log-interval N              Loader progress interval in points (default %" PRIu64 ")\n"
+      "  --log-interval N              Startup progress interval in points (default %" PRIu64 ")\n"
       "  --dpi VALUE                   XY dots per inch (default %.0f)\n"
       "  --layer-height-nm VALUE       Z layer height in nanometers (default %.0f)\n"
       "  --multiplier VALUE            Scales the default build size and voxel radius (default %.2f)\n"
