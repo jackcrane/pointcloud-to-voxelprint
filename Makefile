@@ -7,6 +7,11 @@ QUANTIZE_DIR = quantize
 QUANTIZE_BIN = bin/quantize
 TRANSLATE_DIR = translate
 TRANSLATE_BIN = bin/translate
+ROTATE_DIR = rotate
+ROTATE_BIN = bin/rotate
+CROP_DIR = crop
+CROP_BIN = bin/crop
+ASCII_PLY_DIR = ascii_ply
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -38,10 +43,44 @@ TRANSLATE_HDRS = \
 	$(TRANSLATE_DIR)/translate_ply.h \
 	$(TRANSLATE_DIR)/translate_support.h
 
-.PHONY: quantize translate clean
+ASCII_PLY_SRCS = \
+	$(ASCII_PLY_DIR)/ascii_ply.c \
+	$(ASCII_PLY_DIR)/ascii_ply_support.c
+
+ASCII_PLY_HDRS = \
+	$(ASCII_PLY_DIR)/ascii_ply.h \
+	$(ASCII_PLY_DIR)/ascii_ply_support.h
+
+ROTATE_SRCS = \
+	$(ROTATE_DIR)/rotate.c \
+	$(ROTATE_DIR)/rotate_cli.c \
+	$(ROTATE_DIR)/rotate_pipeline.c \
+	$(ASCII_PLY_SRCS)
+
+ROTATE_HDRS = \
+	$(ROTATE_DIR)/rotate_cli.h \
+	$(ROTATE_DIR)/rotate_common.h \
+	$(ROTATE_DIR)/rotate_pipeline.h \
+	$(ASCII_PLY_HDRS)
+
+CROP_SRCS = \
+	$(CROP_DIR)/crop.c \
+	$(CROP_DIR)/crop_cli.c \
+	$(CROP_DIR)/crop_pipeline.c \
+	$(ASCII_PLY_SRCS)
+
+CROP_HDRS = \
+	$(CROP_DIR)/crop_cli.h \
+	$(CROP_DIR)/crop_common.h \
+	$(CROP_DIR)/crop_pipeline.h \
+	$(ASCII_PLY_HDRS)
+
+.PHONY: quantize translate rotate crop clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
+rotate: $(ROTATE_BIN)
+crop: $(CROP_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -49,8 +88,16 @@ $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 $(TRANSLATE_BIN): $(TRANSLATE_SRCS) $(TRANSLATE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(TRANSLATE_SRCS) $(LDFLAGS) $(LDLIBS)
 
+$(ROTATE_BIN): $(ROTATE_SRCS) $(ROTATE_HDRS) | bin
+	$(CC) $(CFLAGS) -o $@ $(ROTATE_SRCS) $(LDFLAGS) $(LDLIBS)
+
+$(CROP_BIN): $(CROP_SRCS) $(CROP_HDRS) | bin
+	$(CC) $(CFLAGS) -o $@ $(CROP_SRCS) $(LDFLAGS) $(LDLIBS)
+
 bin:
 	mkdir -p $@
 
 clean:
-	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) *.o $(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o
+	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) *.o \
+		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
+		$(ASCII_PLY_DIR)/*.o
