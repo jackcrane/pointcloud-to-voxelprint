@@ -92,7 +92,7 @@ Current defaults in the native slicer (`./bin/slice`):
 
 - XY resolution: `300 DPI`
 - layer height: `27,000 nm`
-- build volume: `1.0" x 2.5" x 0.75"`
+- build volume: `2.5" x 1.0" x 0.75"`
 - voxel radius: `0.010"`
 
 Current defaults in [`quantize/quantize.js`](./quantize/quantize.js):
@@ -163,7 +163,7 @@ Operational details:
 - every layer is generated sequentially
 - the background is flood-filled to `rgba(247, 247, 247, 128)` before point rendering
 - per-pixel occupancy is based on nearest-point distance against a hard-coded voxel radius
-- point alpha influences output alpha when source PLY contains alpha
+- colored pixels render fully opaque; only the flood-filled background remains semi-transparent
 
 Relevant flags:
 

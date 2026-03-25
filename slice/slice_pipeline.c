@@ -1544,13 +1544,6 @@ static const SlicePoint *nearest_point(
 }
 
 static uint8_t output_alpha_for_point(const SlicePoint *point) {
-  const double source_alpha = point->has_alpha ? (double) point->a : 1.0;
-  double alpha = 255.0 - source_alpha * 0.5;
-  if (alpha > 200.0) {
-    alpha = 200.0;
-  }
-  if (alpha < 0.0) {
-    alpha = 0.0;
-  }
-  return (uint8_t) alpha;
+  (void) point;
+  return UINT8_C(255);
 }
