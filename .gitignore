@@ -19,5 +19,5 @@ oz_f1m.ply
 ozark_first_1m.ply
 .gitignore
 ozark_first_10k.ply
-quantize
+/bin/quantize
 *.o

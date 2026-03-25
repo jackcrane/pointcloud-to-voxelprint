@@ -3,23 +3,32 @@ CFLAGS ?= -O3 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 LDFLAGS ?=
 LDLIBS ?= -lm
 
+QUANTIZE_DIR = quantize
+QUANTIZE_BIN = bin/quantize
+
 QUANTIZE_SRCS = \
-	quantize.c \
-	quantize_cli.c \
-	quantize_pipeline.c \
-	quantize_ply.c \
-	quantize_support.c
+	$(QUANTIZE_DIR)/quantize.c \
+	$(QUANTIZE_DIR)/quantize_cli.c \
+	$(QUANTIZE_DIR)/quantize_pipeline.c \
+	$(QUANTIZE_DIR)/quantize_ply.c \
+	$(QUANTIZE_DIR)/quantize_support.c
 
 QUANTIZE_HDRS = \
-	quantize_cli.h \
-	quantize_common.h \
-	quantize_pipeline.h \
-	quantize_ply.h \
-	quantize_support.h
+	$(QUANTIZE_DIR)/quantize_cli.h \
+	$(QUANTIZE_DIR)/quantize_common.h \
+	$(QUANTIZE_DIR)/quantize_pipeline.h \
+	$(QUANTIZE_DIR)/quantize_ply.h \
+	$(QUANTIZE_DIR)/quantize_support.h
 
-quantize: $(QUANTIZE_SRCS) $(QUANTIZE_HDRS)
+.PHONY: quantize clean
+
+quantize: $(QUANTIZE_BIN)
+
+$(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
 
-.PHONY: clean
+bin:
+	mkdir -p $@
+
 clean:
-	rm -f quantize *.o
+	rm -f $(QUANTIZE_BIN) *.o $(QUANTIZE_DIR)/*.o

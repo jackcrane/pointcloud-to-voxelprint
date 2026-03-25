@@ -13,7 +13,7 @@ It is not structured as a library or packaged CLI. Most workflows are driven by 
 The main workflows in this repository are:
 
 - `index.js`: slice a colored PLY point cloud into a stack of RGBA PNG layers
-- `quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
+- `quantize/quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
 - `chamfer.js`: remove material from the edges/corners of an RGBA PNG slice stack using a physical chamfer radius
 - `data/ct/*`: exploratory NRRD-to-PLY conversion utilities for CT-style voxel data
 - `util/generate-pointcloud-sphere.js`: generate a synthetic colored sphere point cloud for testing
@@ -34,7 +34,7 @@ Notes:
 ## Repository Layout
 
 - [`index.js`](./index.js): PLY to PNG-slice conversion
-- [`quantize.js`](./quantize.js): streaming quantizer for large PLY files
+- [`quantize/quantize.js`](./quantize/quantize.js): streaming quantizer for large PLY files
 - [`chamfer.js`](./chamfer.js): chamfer processor for PNG slice directories
 - [`classes/ply.js`](./classes/ply.js): in-memory PLY loader with nearest-neighbor queries
 - [`classes/png.js`](./classes/png.js): minimal PNG writer used by the slicer
@@ -91,7 +91,7 @@ Current defaults in [`index.js`](./index.js):
 - build volume: `1.5" x 1.5" x 0.75"`
 - voxel radius: `0.008"`
 
-Current defaults in [`quantize.js`](./quantize.js):
+Current defaults in [`quantize/quantize.js`](./quantize/quantize.js):
 
 - target size: `0.5" x 0.5" x 0.25"`
 - target resolution: `300 x 300 x 300 DPI-equivalent`
@@ -171,24 +171,24 @@ make quantize
 Command:
 
 ```bash
-./quantize [--log-interval 10000000] [--temp-dir DIR] [--steps bounds,shard,reduce|shard,reduce|reduce] <input.ply> <output.ply>
+./bin/quantize [--log-interval 10000000] [--temp-dir DIR] [--steps bounds,shard,reduce|shard,reduce|reduce] <input.ply> <output.ply>
 ```
 
 Example:
 
 ```bash
-./quantize --log-interval 10000000 data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./bin/quantize --log-interval 10000000 data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
 ```
 
 Partial-run examples:
 
 ```bash
-./quantize --temp-dir ./quantize-cache data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
-./quantize --temp-dir ./quantize-cache --steps shard,reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
-./quantize --temp-dir ./quantize-cache --steps reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./bin/quantize --temp-dir ./quantize-cache data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./bin/quantize --temp-dir ./quantize-cache --steps shard,reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
+./bin/quantize --temp-dir ./quantize-cache --steps reduce data/ct/ct_cloud.ply prepared/ct_cloud_quantized.ply
 ```
 
-What [`quantize.c`](./quantize.c) does:
+What [`quantize/quantize.c`](./quantize/quantize.c) does:
 
 - reads the input PLY header
 - supports ASCII and binary little-endian vertex streams
@@ -345,7 +345,7 @@ This keeps PNG writing local to the repository without adding an image encoding 
 For a clean end-to-end workflow:
 
 1. Generate or obtain a colored PLY.
-2. If the cloud is too dense or irregular, run [`quantize.js`](./quantize.js).
+2. If the cloud is too dense or irregular, run [`quantize/quantize.js`](./quantize/quantize.js).
 3. Slice the PLY with [`index.js`](./index.js).
 4. Post-process the slice stack with [`chamfer.js`](./chamfer.js) if edge relief is needed.
 

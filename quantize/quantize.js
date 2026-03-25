@@ -9,7 +9,7 @@ import {
   parseHeaderText,
   pickReader,
   readColorFromParts,
-} from "./util/ply-format.js";
+} from "../util/ply-format.js";
 
 const { SingleBar, Presets } = cliProgress;
 
@@ -35,7 +35,7 @@ const run = async () => {
   const startedAtNs = process.hrtime.bigint();
   const [inputPathArg, outputPathArg] = process.argv.slice(2);
   if (!inputPathArg || !outputPathArg) {
-    console.error("Usage: node quantize.js <input.ply> <output.ply>");
+    console.error("Usage: node quantize/quantize.js <input.ply> <output.ply>");
     process.exit(1);
   }
 
