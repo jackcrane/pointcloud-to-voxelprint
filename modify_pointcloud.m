@@ -1,3 +1,4 @@
+function modify_pointcloud
 clear; clc;
 
 maxPoints = 5e6;
