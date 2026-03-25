@@ -1,5 +1,3 @@
-% render_single_ply_with_bounds_ui.m
-
 clear; clc;
 
 maxPoints = 5e6;
@@ -76,7 +74,6 @@ bounds = [xmin xmax; ymin ymax; zmin zmax];
 
 %% ---------- FIGURE ----------
 fig = figure('Color','w','Units','normalized','Position',[0 0 1 1]);
-
 ax = axes('Parent',fig,'Position',[0.05 0.1 0.7 0.85]);
 
 scatterHandle = scatter3(ax, X, Y, Z, 1, [R G B], '.');
@@ -98,75 +95,71 @@ inputs = cell(3,2);
 for i = 1:3
     y = 0.8 - (i-1)*0.15;
 
-    % min input
-    inputs{i,1} = uicontrol(fig,'Style','edit',...
-        'Units','normalized','Position',[0.8 y 0.08 0.05],...
-        'String',num2str(bounds(i,1)),...
-        'Callback',@(src,~) updateBounds());
+    inputs{i,1} = uicontrol(fig,'Style','edit', ...
+        'Units','normalized','Position',[0.8 y 0.08 0.05], ...
+        'String',num2str(bounds(i,1)), ...
+        'Callback',@(~,~) updateBounds());
 
-    % max input
-    inputs{i,2} = uicontrol(fig,'Style','edit',...
-        'Units','normalized','Position',[0.89 y 0.08 0.05],...
-        'String',num2str(bounds(i,2)),...
-        'Callback',@(src,~) updateBounds());
+    inputs{i,2} = uicontrol(fig,'Style','edit', ...
+        'Units','normalized','Position',[0.89 y 0.08 0.05], ...
+        'String',num2str(bounds(i,2)), ...
+        'Callback',@(~,~) updateBounds());
 
-    % +
-    uicontrol(fig,'Style','pushbutton','String','+',...
-        'Units','normalized','Position',[0.8 y-0.06 0.08 0.05],...
+    uicontrol(fig,'Style','pushbutton','String','+', ...
+        'Units','normalized','Position',[0.8 y-0.06 0.08 0.05], ...
         'Callback',@(~,~) shiftBound(i, +1));
 
-    % -
-    uicontrol(fig,'Style','pushbutton','String','-',...
-        'Units','normalized','Position',[0.89 y-0.06 0.08 0.05],...
+    uicontrol(fig,'Style','pushbutton','String','-', ...
+        'Units','normalized','Position',[0.89 y-0.06 0.08 0.05], ...
         'Callback',@(~,~) shiftBound(i, -1));
 
-    % label
-    uicontrol(fig,'Style','text','String',labels{i},...
-        'Units','normalized','Position',[0.75 y 0.04 0.05],...
+    uicontrol(fig,'Style','text','String',labels{i}, ...
+        'Units','normalized','Position',[0.75 y 0.04 0.05], ...
         'BackgroundColor','w','FontWeight','bold');
 end
 
-%% ---------- FUNCTIONS ----------
+updateBounds();
 
-function updateBounds()
-    for k = 1:3
-        bounds(k,1) = str2double(inputs{k,1}.String);
-        bounds(k,2) = str2double(inputs{k,2}.String);
+    function updateBounds()
+        for k = 1:3
+            bounds(k,1) = str2double(get(inputs{k,1}, 'String'));
+            bounds(k,2) = str2double(get(inputs{k,2}, 'String'));
+        end
+
+        mask = X >= bounds(1,1) & X <= bounds(1,2) & ...
+               Y >= bounds(2,1) & Y <= bounds(2,2) & ...
+               Z >= bounds(3,1) & Z <= bounds(3,2);
+
+        set(scatterHandle, ...
+            'XData', X(mask), ...
+            'YData', Y(mask), ...
+            'ZData', Z(mask), ...
+            'CData', [R(mask) G(mask) B(mask)]);
+
+        dx = bounds(1,2)-bounds(1,1);
+        dy = bounds(2,2)-bounds(2,1);
+        dz = bounds(3,2)-bounds(3,1);
+        d = max([dx dy dz]);
+
+        cx = mean(bounds(1,:));
+        cy = mean(bounds(2,:));
+        cz = mean(bounds(3,:));
+
+        xlim(ax, cx + [-d/2 d/2]);
+        ylim(ax, cy + [-d/2 d/2]);
+        zlim(ax, cz + [-d/2 d/2]);
     end
 
-    mask = X >= bounds(1,1) & X <= bounds(1,2) & ...
-           Y >= bounds(2,1) & Y <= bounds(2,2) & ...
-           Z >= bounds(3,1) & Z <= bounds(3,2);
+    function shiftBound(dim, direction)
+        range = bounds(dim,2) - bounds(dim,1);
+        shift = 0.5 * range * direction;
 
-    scatterHandle.XData = X(mask);
-    scatterHandle.YData = Y(mask);
-    scatterHandle.ZData = Z(mask);
-    scatterHandle.CData = [R(mask) G(mask) B(mask)];
+        bounds(dim,1) = bounds(dim,1) + shift;
+        bounds(dim,2) = bounds(dim,2) + shift;
 
-    % keep cube scaling
-    dx = bounds(1,2)-bounds(1,1);
-    dy = bounds(2,2)-bounds(2,1);
-    dz = bounds(3,2)-bounds(3,1);
-    d = max([dx dy dz]);
+        set(inputs{dim,1}, 'String', num2str(bounds(dim,1)));
+        set(inputs{dim,2}, 'String', num2str(bounds(dim,2)));
 
-    cx = mean(bounds(1,:));
-    cy = mean(bounds(2,:));
-    cz = mean(bounds(3,:));
-
-    xlim(ax, cx + [-d/2 d/2]);
-    ylim(ax, cy + [-d/2 d/2]);
-    zlim(ax, cz + [-d/2 d/2]);
-end
-
-function shiftBound(dim, direction)
-    range = bounds(dim,2) - bounds(dim,1);
-    shift = 0.5 * range * direction;
-
-    bounds(dim,1) = bounds(dim,1) + shift;
-    bounds(dim,2) = bounds(dim,2) + shift;
-
-    inputs{dim,1}.String = num2str(bounds(dim,1));
-    inputs{dim,2}.String = num2str(bounds(dim,2));
-
-    updateBounds();
+        updateBounds();
+    end
 end
