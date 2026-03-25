@@ -16,7 +16,7 @@ const {
   depth,
   plyPath,
 } = workerData;
-const ply = new PLY(plyPath);
+const ply = await PLY.load(plyPath);
 const image = new PNG(width, height);
 
 for (let z = startZ; z < endZ; z++) {

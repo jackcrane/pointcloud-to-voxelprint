@@ -1,18 +1,32 @@
-import { readFileSync } from "fs";
 import { Point3D } from "./Point3D.js";
 import {
-  getVertexFieldIndices,
-  parseHeaderFromBuffer,
-  pickReader,
-  readColorFromParts,
+  forEachPlyVertex,
+  readPlyHeader,
 } from "../util/ply-format.js";
 
 /** Minimal PLY loader supporting ASCII and binary_little_endian vertex data (x,y,z + optional r,g,b,a) */
 export class PLY {
+  /** @param {Point3D[]} points */
+  constructor(points = []) {
+    if (typeof points === "string") {
+      throw new Error("PLY loading is async. Use await PLY.load(filePath).");
+    }
+
+    /** @type {Point3D[]} */
+    this.points = points;
+
+    // ---- precompute bounds
+    this.#computeBounds();
+
+    // ---- build balanced kd-tree for fast nearest queries
+    this._kdRoot = buildKdTree(this.points);
+  }
+
   /** @param {string} filePath */
-  constructor(filePath) {
-    const buf = readFileSync(filePath);
-    const { header, headerEndOffset } = parseHeaderFromBuffer(buf);
+  static load = async (filePath) => {
+    const headerInfo = await readPlyHeader(filePath);
+    const { header } = headerInfo;
+
     if (
       !header.format.startsWith("ascii") &&
       !header.format.startsWith("binary_little_endian")
@@ -23,71 +37,15 @@ export class PLY {
       throw new Error("PLY has no vertex element.");
     }
 
-    const props = header.vertex.properties; // array of {name,type}
-    const idx = getVertexFieldIndices(props);
-    if (idx.x < 0 || idx.y < 0 || idx.z < 0)
-      throw new Error("PLY vertex must include x,y,z.");
-
-    const cidx = idx;
-
-    const count = header.vertex.count;
     /** @type {Point3D[]} */
-    this.points = [];
+    const points = [];
 
-    if (header.format.startsWith("ascii")) {
-      const text = buf.slice(headerEndOffset).toString("utf8");
-      const lines = text
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter((l) => l.length && !l.startsWith("comment"));
+    await forEachPlyVertex(filePath, headerInfo, ({ x, y, z, color }) => {
+      points.push(new Point3D(x, y, z, color));
+    });
 
-      for (let i = 0; i < count; i++) {
-        if (!lines[i]) {
-          throw new Error(
-            `PLY ASCII parse error: expected ${count} vertices, got ${lines.length}`,
-          );
-        }
-
-        const parts = lines[i].trim().split(/\s+/);
-        const x = parseFloat(parts[idx.x]);
-        const y = parseFloat(parts[idx.y]);
-        const z = parseFloat(parts[idx.z]);
-        const color = readColorFromParts(parts, cidx);
-        const p = new Point3D(x, y, z, color);
-        this.points.push(p);
-      }
-    } else {
-      // binary_little_endian
-      const dv = new DataView(buf.buffer, buf.byteOffset + headerEndOffset);
-      let off = 0;
-      const readers = props.map((p) => pickReader(p.type));
-      const stride = readers.reduce((s, r) => s + r.size, 0);
-
-      for (let i = 0; i < count; i++) {
-        let pos = off;
-        const values = new Array(readers.length);
-        for (let pi = 0; pi < readers.length; pi++) {
-          const r = readers[pi];
-          values[pi] = r.read(dv, pos);
-          pos += r.size;
-        }
-        off += stride;
-
-        const x = Number(values[idx.x]);
-        const y = Number(values[idx.y]);
-        const z = Number(values[idx.z]);
-        const color = readColorFromParts(values, cidx);
-        const p = new Point3D(x, y, z, color);
-        this.points.push(p);
-      }
-    }
-
-    // ---- precompute bounds
-    this.#computeBounds();
-
-    // ---- build balanced kd-tree for fast nearest queries
-    this._kdRoot = buildKdTree(this.points);
-  }
+    return new PLY(points);
+  };
 
   /**
    * Points with z in [zMin, zMax] (inclusive).

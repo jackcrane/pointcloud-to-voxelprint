@@ -3,7 +3,6 @@
 
 import { PLY } from "./classes/ply.js";
 import { PNG } from "./classes/png.js";
-import { Point3D } from "./classes/Point3D.js";
 import cliProgress from "cli-progress";
 import fs from "fs";
 const { SingleBar, Presets } = cliProgress;
@@ -15,15 +14,15 @@ const NM_PER_INCH = 25_400_000; // exact
 
 const multiplier = 1;
 // === Physical build size (inches) ===
-const X_IN = 1.5 * multiplier;
-const Y_IN = 1.5 * multiplier;
+const X_IN = 1 * multiplier;
+const Y_IN = 2.5 * multiplier;
 const Z_IN = 0.75 * multiplier;
 // const X_IN = 3.85 / 2;
 // const Y_IN = 3.34 / 2;
 // const Z_IN = 7.74 / 2;
 
 // === Dot radius (inches) ===
-const VOXEL_RADIUS_INCHES = 0.008 * multiplier;
+const VOXEL_RADIUS_INCHES = 0.01 * multiplier;
 
 /** ---- main ---- */
 export const run = async () => {
@@ -40,7 +39,8 @@ export const run = async () => {
 
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const ply = new PLY(inputPath);
+  console.log("Loading PLY into memory...");
+  const ply = await PLY.load(inputPath);
   const { min, max } = ply.getBounds();
   console.log(min, max);
 
@@ -145,10 +145,11 @@ export const run = async () => {
         if (d > VOXEL_RADIUS) continue;
 
         // Enable color by uncommenting below line:
-        const alpha = Math.min(
-          255 - (Number.isFinite(p.a) ? p.a : 1) * 0.5,
-          200,
-        );
+        // const alpha = Math.min(
+        //   255 - (Number.isFinite(p.a) ? p.a : 1) * 0.5,
+        //   200,
+        // );
+        // const alpha = 250;
 
         image.setPixel(column, row, p.r, p.g, p.b, alpha);
         // image.setPixel(column, row, 1, 1, 1, 255);
