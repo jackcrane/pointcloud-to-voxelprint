@@ -5,6 +5,8 @@ LDLIBS ?= -lm
 
 QUANTIZE_DIR = quantize
 QUANTIZE_BIN = bin/quantize
+TRANSLATE_DIR = translate
+TRANSLATE_BIN = bin/translate
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -20,15 +22,35 @@ QUANTIZE_HDRS = \
 	$(QUANTIZE_DIR)/quantize_ply.h \
 	$(QUANTIZE_DIR)/quantize_support.h
 
-.PHONY: quantize clean
+TRANSLATE_SRCS = \
+	$(TRANSLATE_DIR)/translate.c \
+	$(TRANSLATE_DIR)/translate_cli.c \
+	$(TRANSLATE_DIR)/translate_las.c \
+	$(TRANSLATE_DIR)/translate_pipeline.c \
+	$(TRANSLATE_DIR)/translate_ply.c \
+	$(TRANSLATE_DIR)/translate_support.c
+
+TRANSLATE_HDRS = \
+	$(TRANSLATE_DIR)/translate_cli.h \
+	$(TRANSLATE_DIR)/translate_common.h \
+	$(TRANSLATE_DIR)/translate_las.h \
+	$(TRANSLATE_DIR)/translate_pipeline.h \
+	$(TRANSLATE_DIR)/translate_ply.h \
+	$(TRANSLATE_DIR)/translate_support.h
+
+.PHONY: quantize translate clean
 
 quantize: $(QUANTIZE_BIN)
+translate: $(TRANSLATE_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
+
+$(TRANSLATE_BIN): $(TRANSLATE_SRCS) $(TRANSLATE_HDRS) | bin
+	$(CC) $(CFLAGS) -o $@ $(TRANSLATE_SRCS) $(LDFLAGS) $(LDLIBS)
 
 bin:
 	mkdir -p $@
 
 clean:
-	rm -f $(QUANTIZE_BIN) *.o $(QUANTIZE_DIR)/*.o
+	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) *.o $(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o

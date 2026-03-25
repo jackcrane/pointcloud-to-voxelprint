@@ -13,6 +13,7 @@ It is not structured as a library or packaged CLI. Most workflows are driven by 
 The main workflows in this repository are:
 
 - `index.js`: slice a colored PLY point cloud into a stack of RGBA PNG layers
+- `translate/translate.c`: stream a colorized LAS into an ASCII PLY
 - `quantize/quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
 - `chamfer.js`: remove material from the edges/corners of an RGBA PNG slice stack using a physical chamfer radius
 - `data/ct/*`: exploratory NRRD-to-PLY conversion utilities for CT-style voxel data
@@ -24,6 +25,7 @@ The main workflows in this repository are:
 - ESM enabled at the repository root via [`package.json`](./package.json)
 - Top-level dependencies declared in [`package.json`](./package.json)
 - `sharp` available in the environment if you want to run [`chamfer.js`](./chamfer.js)
+- a C compiler such as `cc` if you want to build the native tools
 
 Notes:
 
@@ -34,6 +36,7 @@ Notes:
 ## Repository Layout
 
 - [`index.js`](./index.js): PLY to PNG-slice conversion
+- [`translate/translate.c`](./translate/translate.c): streaming LAS to PLY converter for large colorized LAS files
 - [`quantize/quantize.js`](./quantize/quantize.js): streaming quantizer for large PLY files
 - [`chamfer.js`](./chamfer.js): chamfer processor for PNG slice directories
 - [`classes/ply.js`](./classes/ply.js): in-memory PLY loader with nearest-neighbor queries
@@ -160,7 +163,44 @@ Performance and scaling:
 - this path is memory-heavy because it loads the full point cloud and kd-tree in-process
 - it is appropriate for moderate inputs, not for arbitrarily large scans
 
-### 3. Quantize a Dense PLY
+### 3. Translate a Colorized LAS to PLY
+
+Build the native translator:
+
+```bash
+make translate
+```
+
+Command:
+
+```bash
+./bin/translate [--log-interval 10000000] <input.las> <output.ply>
+```
+
+Example:
+
+```bash
+./bin/translate scans/site_scan.las prepared/site_scan_ascii.ply
+```
+
+What [`translate/translate.c`](./translate/translate.c) does:
+
+- reads the LAS public header and validates that the file is an uncompressed colorized LAS
+- supports LAS point formats `2`, `3`, `5`, `7`, `8`, and `10`
+- streams point records in batches instead of loading the cloud into memory
+- applies the LAS scale and offset to recover source-space coordinates
+- writes an ASCII PLY with `double` `x/y/z` and `ushort` `red/green/blue`
+- preserves 16-bit LAS RGB values instead of downsampling them to 8-bit
+
+Important behaviors:
+
+- input and output paths must differ
+- the output directory is created if missing
+- the translator does not support compressed `LAZ`
+- periodic progress logs are emitted every `10,000,000` points by default; use `--log-interval N` to change that or `--log-interval 0` to disable them
+- the output is intentionally ASCII because that is the requested interchange format, so it will be substantially larger and slower to write than a binary PLY
+
+### 4. Quantize a Dense PLY
 
 Build the native quantizer:
 
@@ -227,7 +267,7 @@ Current implementation characteristics:
 
 This binary is the most suitable path in the repository for large PLY inputs because it streams vertex data instead of building a full in-memory point set.
 
-### 4. Chamfer a PNG Slice Stack
+### 5. Chamfer a PNG Slice Stack
 
 Command:
 
