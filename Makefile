@@ -12,6 +12,8 @@ ROTATE_BIN = bin/rotate
 CROP_DIR = crop
 CROP_BIN = bin/crop
 ASCII_PLY_DIR = ascii_ply
+SLICE_DIR = slice
+SLICE_BIN = bin/slice
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -75,12 +77,23 @@ CROP_HDRS = \
 	$(CROP_DIR)/crop_pipeline.h \
 	$(ASCII_PLY_HDRS)
 
-.PHONY: quantize translate rotate crop clean
+SLICE_SRCS = \
+	$(SLICE_DIR)/slice.c \
+	$(SLICE_DIR)/slice_cli.c \
+	$(SLICE_DIR)/slice_pipeline.c
+
+SLICE_HDRS = \
+	$(SLICE_DIR)/slice_cli.h \
+	$(SLICE_DIR)/slice_common.h \
+	$(SLICE_DIR)/slice_pipeline.h
+
+.PHONY: quantize translate rotate crop slice clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
 rotate: $(ROTATE_BIN)
 crop: $(CROP_BIN)
+slice: $(SLICE_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -94,10 +107,13 @@ $(ROTATE_BIN): $(ROTATE_SRCS) $(ROTATE_HDRS) | bin
 $(CROP_BIN): $(CROP_SRCS) $(CROP_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(CROP_SRCS) $(LDFLAGS) $(LDLIBS)
 
+$(SLICE_BIN): $(SLICE_SRCS) $(SLICE_HDRS) | bin
+	$(CC) $(CFLAGS) -o $@ $(SLICE_SRCS) $(LDFLAGS) $(LDLIBS)
+
 bin:
 	mkdir -p $@
 
 clean:
-	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) *.o \
+	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) *.o \
 		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
-		$(ASCII_PLY_DIR)/*.o
+		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o

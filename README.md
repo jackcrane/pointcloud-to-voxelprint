@@ -12,7 +12,8 @@ It is not structured as a library or packaged CLI. Most workflows are driven by 
 
 The main workflows in this repository are:
 
-- `index.js`: slice a colored PLY point cloud into a stack of RGBA PNG layers
+- `index.js`: original JavaScript slicer reference
+- `slice/`: native C rewrite of the PLY-to-PNG slicer, built as `bin/slice`
 - `translate/translate.c`: stream a colorized LAS into an ASCII PLY
 - `quantize/quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
 - `chamfer.js`: remove material from the edges/corners of an RGBA PNG slice stack using a physical chamfer radius
@@ -87,12 +88,12 @@ For slice stacks processed by [`chamfer.js`](./chamfer.js):
 
 The print-oriented scripts use physical units directly in source.
 
-Current defaults in [`index.js`](./index.js):
+Current defaults in the native slicer (`./bin/slice`):
 
 - XY resolution: `300 DPI`
 - layer height: `27,000 nm`
-- build volume: `1.5" x 1.5" x 0.75"`
-- voxel radius: `0.008"`
+- build volume: `1.0" x 2.5" x 0.75"`
+- voxel radius: `0.010"`
 
 Current defaults in [`quantize/quantize.js`](./quantize/quantize.js):
 
@@ -104,7 +105,7 @@ Current defaults in [`chamfer.js`](./chamfer.js):
 - XY resolution: `300 DPI`
 - layer height: `27,000 nm`
 
-If those dimensions are not appropriate for your job, edit the constants in source before running the script.
+The native slicer also exposes those values as CLI flags, so you do not need to edit source to change them.
 
 ## Usage Reference
 
@@ -128,23 +129,29 @@ The generator can also be imported and customized from another script if you wan
 
 ### 2. Slice a PLY into PNG Layers
 
+Build:
+
+```bash
+make slice
+```
+
 Command:
 
 ```bash
-node index.js <input.ply> <output_dir>
+./bin/slice [options] <input.ply> <output_dir>
 ```
 
 Example:
 
 ```bash
-node index.js sphere.ply sphere/sphere_out
+./bin/slice data/sphere.ply sphere/sphere_out
 ```
 
-What [`index.js`](./index.js) does:
+What the native slicer does:
 
-- loads the entire PLY into memory through [`classes/ply.js`](./classes/ply.js)
+- loads the entire PLY into memory through a native ASCII/binary parser
 - computes point bounds
-- maps the model bounds onto the hard-coded physical build size
+- maps the model bounds onto the configured physical build size
 - builds a kd-tree for nearest-point lookup
 - rasterizes each Z layer into an RGBA PNG
 - writes files as `out_<layer>.png`
@@ -157,6 +164,16 @@ Operational details:
 - the background is flood-filled to `rgba(247, 247, 247, 128)` before point rendering
 - per-pixel occupancy is based on nearest-point distance against a hard-coded voxel radius
 - point alpha influences output alpha when source PLY contains alpha
+
+Relevant flags:
+
+- `--dpi`
+- `--layer-height-nm`
+- `--multiplier`
+- `--x-in`, `--y-in`, `--z-in`
+- `--longest-side-in` for any dimension set to `auto`
+- `--voxel-radius-inches`
+- `--padding-ratio`
 
 Performance and scaling:
 
@@ -343,6 +360,28 @@ NRRD conversion notes:
 - point decimation is done with the `stride` parameter by skipping voxel coordinates not divisible by the stride
 
 ## Implementation Notes
+
+### `slice/`
+
+[`slice/`](./slice/) is the native slicer implementation. It provides:
+
+- ASCII and binary little-endian PLY parsing
+- color normalization for integer and float color fields
+- balanced kd-tree nearest-point lookup
+- an in-repo PNG writer with uncompressed DEFLATE blocks
+- CLI flags covering the old `index.js` physical sizing constants
+
+Build it with:
+
+```bash
+make slice
+```
+
+Run it with:
+
+```bash
+./bin/slice --help
+```
 
 ### `classes/ply.js`
 
