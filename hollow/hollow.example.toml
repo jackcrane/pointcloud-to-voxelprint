@@ -17,6 +17,9 @@ dist_negative_y = 30
 dist_positive_z = 30
 dist_negative_z = 0
 
+# 45-degree diagonals in the XY, XZ, and YZ planes are also checked.
+# Their reach is derived from the paired axis thresholds using Euclidean distance.
+
 colors_for_removal = [
   [255, 255, 255],
   [247, 247, 247, 128],

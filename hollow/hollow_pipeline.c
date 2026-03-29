@@ -109,6 +109,52 @@ static void run_negative_z_pass(
     uint32_t threshold,
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
+static bool diagonal_pass_enabled(uint32_t distance_a, uint32_t distance_b);
+static uint64_t diagonal_threshold_sq(uint32_t distance_a, uint32_t distance_b);
+static bool diagonal_step_within_threshold(size_t step_count, uint64_t threshold_sq);
+static void process_diagonal_line(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    const size_t *line_indices,
+    size_t line_length,
+    uint64_t threshold_sq,
+    bool treat_edges_as_blockers);
+static void run_xy_diagonal_pass(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    size_t layer_count,
+    uint32_t width,
+    uint32_t height,
+    uint32_t distance_x,
+    uint32_t distance_y,
+    bool invert_y,
+    bool reverse_line_direction,
+    bool treat_edges_as_blockers,
+    ProgressTracker *progress);
+static void run_xz_diagonal_pass(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    size_t layer_count,
+    uint32_t width,
+    uint32_t height,
+    uint32_t distance_x,
+    uint32_t distance_z,
+    bool invert_z,
+    bool reverse_line_direction,
+    bool treat_edges_as_blockers,
+    ProgressTracker *progress);
+static void run_yz_diagonal_pass(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    size_t layer_count,
+    uint32_t width,
+    uint32_t height,
+    uint32_t distance_y,
+    uint32_t distance_z,
+    bool invert_y,
+    bool reverse_line_direction,
+    bool treat_edges_as_blockers,
+    ProgressTracker *progress);
 static uint32_t read_u32_be(const uint8_t *bytes);
 static void write_u32_be(uint8_t *out, uint32_t value);
 static uint32_t crc32_bytes(const uint8_t *bytes, size_t length);
@@ -238,6 +284,18 @@ int run_hollow(const HollowOptions *options) {
   active_pass_count += options->dist_negative_y > 0u ? 1u : 0u;
   active_pass_count += options->dist_positive_z > 0u ? 1u : 0u;
   active_pass_count += options->dist_negative_z > 0u ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_positive_x, options->dist_positive_y) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_negative_x, options->dist_negative_y) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_positive_x, options->dist_negative_y) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_negative_x, options->dist_positive_y) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_positive_x, (uint32_t) options->dist_positive_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_negative_x, (uint32_t) options->dist_negative_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_positive_x, (uint32_t) options->dist_negative_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_negative_x, (uint32_t) options->dist_positive_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_positive_y, (uint32_t) options->dist_positive_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_negative_y, (uint32_t) options->dist_negative_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_negative_y, (uint32_t) options->dist_positive_z) ? 1u : 0u;
+  active_pass_count += diagonal_pass_enabled(options->dist_positive_y, (uint32_t) options->dist_negative_z) ? 1u : 0u;
   total_progress_units = (uint64_t) total_voxels * (3u + active_pass_count);
   progress_begin(&progress, options->log_interval, total_progress_units);
 
@@ -320,6 +378,162 @@ int run_hollow(const HollowOptions *options) {
                         options->dist_negative_z,
                         options->treat_edges_as_blockers,
                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_positive_x, options->dist_positive_y)) {
+    run_xy_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_positive_x,
+                         options->dist_positive_y,
+                         false,
+                         true,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_negative_x, options->dist_negative_y)) {
+    run_xy_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_negative_x,
+                         options->dist_negative_y,
+                         false,
+                         false,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_positive_x, options->dist_negative_y)) {
+    run_xy_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_positive_x,
+                         options->dist_negative_y,
+                         true,
+                         true,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_negative_x, options->dist_positive_y)) {
+    run_xy_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_negative_x,
+                         options->dist_positive_y,
+                         true,
+                         false,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_positive_x, options->dist_positive_z)) {
+    run_xz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_positive_x,
+                         options->dist_positive_z,
+                         false,
+                         true,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_negative_x, options->dist_negative_z)) {
+    run_xz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_negative_x,
+                         options->dist_negative_z,
+                         false,
+                         false,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_positive_x, options->dist_negative_z)) {
+    run_xz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_positive_x,
+                         options->dist_negative_z,
+                         true,
+                         true,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_negative_x, options->dist_positive_z)) {
+    run_xz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_negative_x,
+                         options->dist_positive_z,
+                         true,
+                         false,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_positive_y, options->dist_positive_z)) {
+    run_yz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_positive_y,
+                         options->dist_positive_z,
+                         false,
+                         true,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_negative_y, options->dist_negative_z)) {
+    run_yz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_negative_y,
+                         options->dist_negative_z,
+                         false,
+                         false,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_negative_y, options->dist_positive_z)) {
+    run_yz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_negative_y,
+                         options->dist_positive_z,
+                         true,
+                         true,
+                         options->treat_edges_as_blockers,
+                         &progress);
+  }
+  if (diagonal_pass_enabled(options->dist_positive_y, options->dist_negative_z)) {
+    run_yz_diagonal_pass(removable_map,
+                         keep_map,
+                         layer_count,
+                         width,
+                         height,
+                         options->dist_positive_y,
+                         options->dist_negative_z,
+                         true,
+                         false,
+                         options->treat_edges_as_blockers,
+                         &progress);
   }
 
   for (size_t layer = 0; layer < layer_count; ++layer) {
@@ -824,6 +1038,297 @@ static void run_negative_z_pass(
       progress_advance(progress, (uint64_t) layer_count);
     }
   }
+}
+
+static bool diagonal_pass_enabled(uint32_t distance_a, uint32_t distance_b) {
+  return distance_a > 0u && distance_b > 0u;
+}
+
+static uint64_t diagonal_threshold_sq(uint32_t distance_a, uint32_t distance_b) {
+  return (uint64_t) distance_a * (uint64_t) distance_a +
+         (uint64_t) distance_b * (uint64_t) distance_b;
+}
+
+static bool diagonal_step_within_threshold(size_t step_count, uint64_t threshold_sq) {
+  const uint64_t step = (uint64_t) step_count;
+  return 2u * step * step <= threshold_sq;
+}
+
+static void process_diagonal_line(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    const size_t *line_indices,
+    size_t line_length,
+    uint64_t threshold_sq,
+    bool treat_edges_as_blockers) {
+  if (line_length == 0u) {
+    return;
+  }
+
+  int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
+  for (size_t pos = 0; pos < line_length; ++pos) {
+    const size_t index = line_indices[pos];
+    if (removable_map[index] == 0u) {
+      previous_blocker = (int64_t) pos;
+      continue;
+    }
+    if (previous_blocker != INT64_MIN &&
+        diagonal_step_within_threshold((size_t) ((int64_t) pos - previous_blocker), threshold_sq)) {
+      keep_map[index] = 1u;
+    }
+  }
+}
+
+static void run_xy_diagonal_pass(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    size_t layer_count,
+    uint32_t width,
+    uint32_t height,
+    uint32_t distance_x,
+    uint32_t distance_y,
+    bool invert_y,
+    bool reverse_line_direction,
+    bool treat_edges_as_blockers,
+    ProgressTracker *progress) {
+  const size_t max_line_length = width > height ? width : height;
+  size_t *line_indices = malloc(max_line_length * sizeof(*line_indices));
+  if (line_indices == NULL) {
+    fprintf(stderr, "Failed to allocate XY diagonal line buffer.\n");
+    return;
+  }
+
+  const uint64_t threshold_sq = diagonal_threshold_sq(distance_x, distance_y);
+  for (size_t layer = 0; layer < layer_count; ++layer) {
+    for (uint32_t start_x = 0; start_x < width; ++start_x) {
+      size_t line_length = 0u;
+      for (uint32_t x = start_x, y = invert_y ? (height - 1u) : 0u; x < width;) {
+        line_indices[line_length++] = voxel_index(layer, y, x, width, height);
+        ++x;
+        if (invert_y) {
+          if (y == 0u) {
+            break;
+          }
+          --y;
+        } else {
+          ++y;
+          if (y >= height) {
+            break;
+          }
+        }
+      }
+      if (reverse_line_direction) {
+        for (size_t i = 0; i < line_length / 2u; ++i) {
+          const size_t tmp = line_indices[i];
+          line_indices[i] = line_indices[line_length - 1u - i];
+          line_indices[line_length - 1u - i] = tmp;
+        }
+      }
+      process_diagonal_line(
+          removable_map, keep_map, line_indices, line_length, threshold_sq, treat_edges_as_blockers);
+      progress_advance(progress, line_length);
+    }
+
+    for (uint32_t start_y = 1; start_y < height; ++start_y) {
+      size_t line_length = 0u;
+      const uint32_t initial_y = invert_y ? (height - 1u - start_y) : start_y;
+      for (uint32_t x = 0u, y = initial_y; x < width;) {
+        line_indices[line_length++] = voxel_index(layer, y, x, width, height);
+        ++x;
+        if (invert_y) {
+          if (y == 0u) {
+            break;
+          }
+          --y;
+        } else {
+          ++y;
+          if (y >= height) {
+            break;
+          }
+        }
+      }
+      if (reverse_line_direction) {
+        for (size_t i = 0; i < line_length / 2u; ++i) {
+          const size_t tmp = line_indices[i];
+          line_indices[i] = line_indices[line_length - 1u - i];
+          line_indices[line_length - 1u - i] = tmp;
+        }
+      }
+      process_diagonal_line(
+          removable_map, keep_map, line_indices, line_length, threshold_sq, treat_edges_as_blockers);
+      progress_advance(progress, line_length);
+    }
+  }
+
+  free(line_indices);
+}
+
+static void run_xz_diagonal_pass(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    size_t layer_count,
+    uint32_t width,
+    uint32_t height,
+    uint32_t distance_x,
+    uint32_t distance_z,
+    bool invert_z,
+    bool reverse_line_direction,
+    bool treat_edges_as_blockers,
+    ProgressTracker *progress) {
+  const size_t max_line_length = width > layer_count ? width : layer_count;
+  size_t *line_indices = malloc(max_line_length * sizeof(*line_indices));
+  if (line_indices == NULL) {
+    fprintf(stderr, "Failed to allocate XZ diagonal line buffer.\n");
+    return;
+  }
+
+  const uint64_t threshold_sq = diagonal_threshold_sq(distance_x, distance_z);
+  for (uint32_t y = 0; y < height; ++y) {
+    for (uint32_t start_x = 0; start_x < width; ++start_x) {
+      size_t line_length = 0u;
+      size_t layer = invert_z ? (layer_count - 1u) : 0u;
+      for (size_t x = start_x; x < width;) {
+        line_indices[line_length++] = voxel_index(layer, y, (uint32_t) x, width, height);
+        ++x;
+        if (invert_z) {
+          if (layer == 0u) {
+            break;
+          }
+          --layer;
+        } else {
+          ++layer;
+          if (layer >= layer_count) {
+            break;
+          }
+        }
+      }
+      if (reverse_line_direction) {
+        for (size_t i = 0; i < line_length / 2u; ++i) {
+          const size_t tmp = line_indices[i];
+          line_indices[i] = line_indices[line_length - 1u - i];
+          line_indices[line_length - 1u - i] = tmp;
+        }
+      }
+      process_diagonal_line(
+          removable_map, keep_map, line_indices, line_length, threshold_sq, treat_edges_as_blockers);
+      progress_advance(progress, line_length);
+    }
+
+    for (size_t start_layer = 1u; start_layer < layer_count; ++start_layer) {
+      size_t line_length = 0u;
+      size_t layer = invert_z ? (layer_count - 1u - start_layer) : start_layer;
+      for (size_t x = 0u; x < width;) {
+        line_indices[line_length++] = voxel_index(layer, y, (uint32_t) x, width, height);
+        ++x;
+        if (invert_z) {
+          if (layer == 0u) {
+            break;
+          }
+          --layer;
+        } else {
+          ++layer;
+          if (layer >= layer_count) {
+            break;
+          }
+        }
+      }
+      if (reverse_line_direction) {
+        for (size_t i = 0; i < line_length / 2u; ++i) {
+          const size_t tmp = line_indices[i];
+          line_indices[i] = line_indices[line_length - 1u - i];
+          line_indices[line_length - 1u - i] = tmp;
+        }
+      }
+      process_diagonal_line(
+          removable_map, keep_map, line_indices, line_length, threshold_sq, treat_edges_as_blockers);
+      progress_advance(progress, line_length);
+    }
+  }
+
+  free(line_indices);
+}
+
+static void run_yz_diagonal_pass(
+    const uint8_t *removable_map,
+    uint8_t *keep_map,
+    size_t layer_count,
+    uint32_t width,
+    uint32_t height,
+    uint32_t distance_y,
+    uint32_t distance_z,
+    bool invert_y,
+    bool reverse_line_direction,
+    bool treat_edges_as_blockers,
+    ProgressTracker *progress) {
+  const size_t max_line_length = height > layer_count ? height : layer_count;
+  size_t *line_indices = malloc(max_line_length * sizeof(*line_indices));
+  if (line_indices == NULL) {
+    fprintf(stderr, "Failed to allocate YZ diagonal line buffer.\n");
+    return;
+  }
+
+  const uint64_t threshold_sq = diagonal_threshold_sq(distance_y, distance_z);
+  for (uint32_t x = 0; x < width; ++x) {
+    for (uint32_t start_y = 0; start_y < height; ++start_y) {
+      size_t line_length = 0u;
+      uint32_t y = invert_y ? (height - 1u - start_y) : start_y;
+      for (size_t layer = 0u; layer < layer_count; ++layer) {
+        line_indices[line_length++] = voxel_index(layer, y, x, width, height);
+        if (invert_y) {
+          if (y == 0u) {
+            break;
+          }
+          --y;
+        } else {
+          ++y;
+          if (y >= height) {
+            break;
+          }
+        }
+      }
+      if (reverse_line_direction) {
+        for (size_t i = 0; i < line_length / 2u; ++i) {
+          const size_t tmp = line_indices[i];
+          line_indices[i] = line_indices[line_length - 1u - i];
+          line_indices[line_length - 1u - i] = tmp;
+        }
+      }
+      process_diagonal_line(
+          removable_map, keep_map, line_indices, line_length, threshold_sq, treat_edges_as_blockers);
+      progress_advance(progress, line_length);
+    }
+
+    for (size_t start_layer = 1u; start_layer < layer_count; ++start_layer) {
+      size_t line_length = 0u;
+      uint32_t y = invert_y ? (height - 1u) : 0u;
+      for (size_t layer = start_layer; layer < layer_count; ++layer) {
+        line_indices[line_length++] = voxel_index(layer, y, x, width, height);
+        if (invert_y) {
+          if (y == 0u) {
+            break;
+          }
+          --y;
+        } else {
+          ++y;
+          if (y >= height) {
+            break;
+          }
+        }
+      }
+      if (reverse_line_direction) {
+        for (size_t i = 0; i < line_length / 2u; ++i) {
+          const size_t tmp = line_indices[i];
+          line_indices[i] = line_indices[line_length - 1u - i];
+          line_indices[line_length - 1u - i] = tmp;
+        }
+      }
+      process_diagonal_line(
+          removable_map, keep_map, line_indices, line_length, threshold_sq, treat_edges_as_blockers);
+      progress_advance(progress, line_length);
+    }
+  }
+
+  free(line_indices);
 }
 
 static uint32_t read_u32_be(const uint8_t *bytes) {

@@ -208,6 +208,9 @@ dist_negative_y = 30
 dist_positive_z = 30
 dist_negative_z = 10
 
+# 45-degree diagonals in the XY, XZ, and YZ planes also count.
+# Their reach is derived from the paired axis thresholds using Euclidean distance.
+
 colors_for_removal = [
   [255, 255, 255],
   [247, 247, 247, 128],
@@ -228,23 +231,25 @@ make hollow
 # Pad the bottom to thicken lake surface
 
 ```
-./pad.sh --number 50 "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-fixedlake" "/media/sf_Voxel_Ubuntu/ozark_slices_1/rgb_final"
+./pad.sh --number 50 "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-hollow" "/media/sf_Voxel_Ubuntu/ozark_slices_1/rgb_final"
 ```
 
 # Generate video clip
 
 ```
-./makevideo.sh --length 15 "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-fixedlake" "/media/sf_Voxel_Ubuntu/ozark_slices_1/rgb_final.mp4"
+./makevideo.sh --length 15 "/media/sf_Voxel_Ubuntu/ozark_slices_1/rgb_final" "/media/sf_Voxel_Ubuntu/ozark_slices_1/rgb_final.mp4"
 ```
 
 # rgb to voxel print util
 
 ## Find os icc profile
 
+(from inside the slice2vox folder)
+
 ```sh
 find /usr/share/color -iname '*srgb*.icc' 2>/dev/null
 ```
 
 ```sh
-./run_profiles.sh /usr/share/color/icc/colord/sRGB.icc /media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-fixedlake /media/sf_Voxel_Ubuntu/ozark_slices_1/vox
+./run_profiles.sh /usr/share/color/icc/colord/sRGB.icc /media/sf_Voxel_Ubuntu/ozark_slices_1/rgb_final /media/sf_Voxel_Ubuntu/ozark_slices_1/vox
 ```
