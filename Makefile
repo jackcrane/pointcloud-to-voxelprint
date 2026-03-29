@@ -1,5 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O3 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
+CXX ?= c++
+CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 LDFLAGS ?=
 LDLIBS ?= -lm
 
@@ -77,15 +79,25 @@ CROP_HDRS = \
 	$(CROP_DIR)/crop_pipeline.h \
 	$(ASCII_PLY_HDRS)
 
-SLICE_SRCS = \
+SLICE_C_SRCS = \
 	$(SLICE_DIR)/slice.c \
-	$(SLICE_DIR)/slice_cli.c \
+	$(SLICE_DIR)/slice_cli_toml.c \
 	$(SLICE_DIR)/slice_pipeline.c
+
+SLICE_CPP_SRCS = \
+	$(SLICE_DIR)/slice_toml.cpp
+
+SLICE_OBJS = \
+	$(SLICE_DIR)/slice.o \
+	$(SLICE_DIR)/slice_cli_toml.o \
+	$(SLICE_DIR)/slice_pipeline.o \
+	$(SLICE_DIR)/slice_toml.o
 
 SLICE_HDRS = \
 	$(SLICE_DIR)/slice_cli.h \
 	$(SLICE_DIR)/slice_common.h \
-	$(SLICE_DIR)/slice_pipeline.h
+	$(SLICE_DIR)/slice_pipeline.h \
+	$(SLICE_DIR)/slice_toml.h
 
 .PHONY: quantize translate rotate crop slice clean
 
@@ -107,8 +119,20 @@ $(ROTATE_BIN): $(ROTATE_SRCS) $(ROTATE_HDRS) | bin
 $(CROP_BIN): $(CROP_SRCS) $(CROP_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(CROP_SRCS) $(LDFLAGS) $(LDLIBS)
 
-$(SLICE_BIN): $(SLICE_SRCS) $(SLICE_HDRS) | bin
-	$(CC) $(CFLAGS) -o $@ $(SLICE_SRCS) $(LDFLAGS) $(LDLIBS)
+$(SLICE_BIN): $(SLICE_OBJS) $(SLICE_HDRS) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $(SLICE_OBJS) $(LDFLAGS) $(LDLIBS)
+
+$(SLICE_DIR)/slice.o: $(SLICE_DIR)/slice.c $(SLICE_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SLICE_DIR)/slice_cli_toml.o: $(SLICE_DIR)/slice_cli_toml.c $(SLICE_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SLICE_DIR)/slice_pipeline.o: $(SLICE_DIR)/slice_pipeline.c $(SLICE_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SLICE_DIR)/slice_toml.o: $(SLICE_DIR)/slice_toml.cpp $(SLICE_HDRS)
+	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
 
 bin:
 	mkdir -p $@

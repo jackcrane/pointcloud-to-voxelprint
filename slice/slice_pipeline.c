@@ -80,6 +80,25 @@ typedef struct KdNode {
 } KdNode;
 
 typedef struct {
+  char magic[8];
+  uint64_t version;
+  uint64_t point_count;
+  double min_x;
+  double min_y;
+  double min_z;
+  double max_x;
+  double max_y;
+  double max_z;
+} KdCacheHeader;
+
+typedef struct {
+  uint64_t point_index;
+  int64_t left_index;
+  int64_t right_index;
+  int32_t axis;
+} KdCacheNodeRecord;
+
+typedef struct {
   uint32_t width;
   uint32_t height;
   size_t stride;
@@ -97,9 +116,12 @@ typedef struct {
   const SlicePoint *best_point;
   double best_nd2;
   double best_euclid_d2;
-  double inv_sx;
-  double inv_sy;
-  double inv_sz;
+  double inv_x_positive;
+  double inv_x_negative;
+  double inv_y_positive;
+  double inv_y_negative;
+  double inv_z_positive;
+  double inv_z_negative;
   bool cutoff_active;
   bool exclude_self;
   unsigned axes_mask;
@@ -137,14 +159,20 @@ static void set_pixel(
 static int write_png(const char *path, const Image *image);
 static KdNode *build_kd_tree(SlicePoint *points, size_t count, uint64_t log_interval);
 static void free_kd_tree(KdNode *node);
+static int load_kd_tree_cache(const char *path, const PointCloud *cloud, KdNode **root_out);
+static int save_kd_tree_cache(const char *path, const PointCloud *cloud, const KdNode *root);
 static const SlicePoint *nearest_point(
     const KdNode *root,
     Vec3 target,
-    double sx,
-    double sy,
-    double sz,
+    double x_positive,
+    double x_negative,
+    double y_positive,
+    double y_negative,
+    double z_positive,
+    double z_negative,
     double *distance_out);
 static uint8_t output_alpha_for_point(const SlicePoint *point);
+static bool doubles_close(double a, double b);
 
 static PlyScalarType parse_ply_scalar_type(const char *type_name);
 static size_t ply_scalar_type_size(PlyScalarType type);
@@ -286,23 +314,69 @@ int run_slice(const SliceOptions *options) {
       (model_units_per_inch_x + model_units_per_inch_y + model_units_per_inch_z) /
       3.0;
 
-  const double voxel_radius = options->voxel_radius_inches * model_units_per_inch;
+  const double voxel_radius_x_positive =
+      options->voxel_radius_x_positive_inches * model_units_per_inch;
+  const double voxel_radius_x_negative =
+      options->voxel_radius_x_negative_inches * model_units_per_inch;
+  const double voxel_radius_y_positive =
+      options->voxel_radius_y_positive_inches * model_units_per_inch;
+  const double voxel_radius_y_negative =
+      options->voxel_radius_y_negative_inches * model_units_per_inch;
+  const double voxel_radius_z_positive =
+      options->voxel_radius_z_positive_inches * model_units_per_inch;
+  const double voxel_radius_z_negative =
+      options->voxel_radius_z_negative_inches * model_units_per_inch;
   printf(
-      "Voxel radius: %.4f in  ->  %.2f model units\n",
-      options->voxel_radius_inches,
-      voxel_radius);
+      "Voxel radii (in): +x %.4f -x %.4f +y %.4f -y %.4f +z %.4f -z %.4f\n",
+      options->voxel_radius_x_positive_inches,
+      options->voxel_radius_x_negative_inches,
+      options->voxel_radius_y_positive_inches,
+      options->voxel_radius_y_negative_inches,
+      options->voxel_radius_z_positive_inches,
+      options->voxel_radius_z_negative_inches);
+  printf(
+      "Voxel radii (model): +x %.2f -x %.2f +y %.2f -y %.2f +z %.2f -z %.2f\n",
+      voxel_radius_x_positive,
+      voxel_radius_x_negative,
+      voxel_radius_y_positive,
+      voxel_radius_y_negative,
+      voxel_radius_z_positive,
+      voxel_radius_z_negative);
 
-  printf("Building kd tree...\n");
+  KdNode *root = NULL;
   const double kd_started_at = slice_now_seconds();
-  KdNode *root = build_kd_tree(cloud.points, cloud.count, options->log_interval);
-  if (root == NULL && cloud.count > 0) {
-    fprintf(stderr, "Failed to build the kd-tree.\n");
-    free_point_cloud(&cloud);
-    return -1;
+  bool loaded_from_cache = false;
+  if (options->kd_cache_path != NULL && options->kd_cache_path[0] != '\0') {
+    if (load_kd_tree_cache(options->kd_cache_path, &cloud, &root) == 0) {
+      loaded_from_cache = true;
+      printf("Loaded kd tree cache: %s\n", options->kd_cache_path);
+    } else {
+      printf("Building kd tree...\n");
+      root = build_kd_tree(cloud.points, cloud.count, options->log_interval);
+      if (root == NULL && cloud.count > 0) {
+        fprintf(stderr, "Failed to build the kd-tree.\n");
+        free_point_cloud(&cloud);
+        return -1;
+      }
+      if (save_kd_tree_cache(options->kd_cache_path, &cloud, root) != 0) {
+        fprintf(stderr, "Warning: failed to save kd tree cache: %s\n", options->kd_cache_path);
+      } else {
+        printf("Saved kd tree cache: %s\n", options->kd_cache_path);
+      }
+    }
+  } else {
+    printf("Building kd tree...\n");
+    root = build_kd_tree(cloud.points, cloud.count, options->log_interval);
+    if (root == NULL && cloud.count > 0) {
+      fprintf(stderr, "Failed to build the kd-tree.\n");
+      free_point_cloud(&cloud);
+      return -1;
+    }
   }
   char kd_elapsed[64];
   printf(
-      "Build kd tree finished in %s\n",
+      "%s kd tree finished in %s\n",
+      loaded_from_cache ? "Load" : "Build",
       slice_format_duration(
           slice_now_seconds() - kd_started_at,
           kd_elapsed,
@@ -333,15 +407,17 @@ int run_slice(const SliceOptions *options) {
 
       for (uint32_t row = 0; row < height; ++row) {
         const double y = min_y + (((double) row + 0.5) / (double) height) * y_size;
-        double distance = 0.0;
         const SlicePoint *point = nearest_point(
             root,
             (Vec3) {x, y, z_world},
-            voxel_radius,
-            voxel_radius,
-            voxel_radius,
-            &distance);
-        if (point == NULL || distance > voxel_radius) {
+            voxel_radius_x_positive,
+            voxel_radius_x_negative,
+            voxel_radius_y_positive,
+            voxel_radius_y_negative,
+            voxel_radius_z_positive,
+            voxel_radius_z_negative,
+            NULL);
+        if (point == NULL) {
           continue;
         }
 
@@ -1435,6 +1511,190 @@ static KdNode *build_kd_tree(SlicePoint *points, size_t count, uint64_t log_inte
   return root;
 }
 
+static bool doubles_close(double a, double b) {
+  const double diff = fabs(a - b);
+  const double scale = fmax(1.0, fmax(fabs(a), fabs(b)));
+  return diff <= (1e-9 * scale);
+}
+
+static int mkdir_parent_recursive(const char *path) {
+  const char *slash = strrchr(path, '/');
+  if (slash == NULL) {
+    return 0;
+  }
+
+  const size_t len = (size_t) (slash - path);
+  if (len == 0) {
+    return 0;
+  }
+
+  char *dir = malloc(len + 1);
+  if (dir == NULL) {
+    return -1;
+  }
+  memcpy(dir, path, len);
+  dir[len] = '\0';
+  const int rc = mkdir_recursive(dir);
+  free(dir);
+  return rc;
+}
+
+static int serialize_kd_tree_node(
+    const KdNode *node,
+    const SlicePoint *points,
+    KdCacheNodeRecord *records,
+    size_t *next_index) {
+  if (node == NULL) {
+    return -1;
+  }
+
+  const size_t index = *next_index;
+  *next_index += 1;
+  records[index].point_index = (uint64_t) (node->point - points);
+  records[index].axis = node->axis;
+  records[index].left_index = serialize_kd_tree_node(node->left, points, records, next_index);
+  records[index].right_index = serialize_kd_tree_node(node->right, points, records, next_index);
+  return (int) index;
+}
+
+static int save_kd_tree_cache(const char *path, const PointCloud *cloud, const KdNode *root) {
+  if (path == NULL || path[0] == '\0' || cloud == NULL) {
+    return -1;
+  }
+  if (mkdir_parent_recursive(path) != 0) {
+    return -1;
+  }
+
+  FILE *file = fopen(path, "wb");
+  if (file == NULL) {
+    return -1;
+  }
+
+  KdCacheHeader header;
+  memset(&header, 0, sizeof(header));
+  memcpy(header.magic, "SLKDCCH", 7);
+  header.version = 1;
+  header.point_count = (uint64_t) cloud->count;
+  header.min_x = cloud->min_x;
+  header.min_y = cloud->min_y;
+  header.min_z = cloud->min_z;
+  header.max_x = cloud->max_x;
+  header.max_y = cloud->max_y;
+  header.max_z = cloud->max_z;
+
+  const size_t node_count = cloud->count;
+  KdCacheNodeRecord *records =
+      node_count == 0 ? NULL : calloc(node_count, sizeof(*records));
+  if (node_count > 0 && records == NULL) {
+    fclose(file);
+    return -1;
+  }
+
+  size_t next_index = 0;
+  if (root != NULL) {
+    serialize_kd_tree_node(root, cloud->points, records, &next_index);
+  }
+
+  const bool ok =
+      fwrite(&header, sizeof(header), 1, file) == 1 &&
+      fwrite(records, sizeof(*records), node_count, file) == node_count;
+  free(records);
+  fclose(file);
+  return ok ? 0 : -1;
+}
+
+static int load_kd_tree_cache(const char *path, const PointCloud *cloud, KdNode **root_out) {
+  if (path == NULL || path[0] == '\0' || cloud == NULL || root_out == NULL) {
+    return -1;
+  }
+
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
+    return -1;
+  }
+
+  KdCacheHeader header;
+  if (fread(&header, sizeof(header), 1, file) != 1) {
+    fclose(file);
+    return -1;
+  }
+
+  if (memcmp(header.magic, "SLKDCCH", 7) != 0 || header.version != 1 ||
+      header.point_count != (uint64_t) cloud->count ||
+      !doubles_close(header.min_x, cloud->min_x) ||
+      !doubles_close(header.min_y, cloud->min_y) ||
+      !doubles_close(header.min_z, cloud->min_z) ||
+      !doubles_close(header.max_x, cloud->max_x) ||
+      !doubles_close(header.max_y, cloud->max_y) ||
+      !doubles_close(header.max_z, cloud->max_z)) {
+    fclose(file);
+    return -1;
+  }
+
+  const size_t node_count = cloud->count;
+  KdCacheNodeRecord *records =
+      node_count == 0 ? NULL : malloc(node_count * sizeof(*records));
+  KdNode **nodes = node_count == 0 ? NULL : calloc(node_count, sizeof(*nodes));
+  if ((node_count > 0 && records == NULL) || (node_count > 0 && nodes == NULL)) {
+    free(records);
+    free(nodes);
+    fclose(file);
+    return -1;
+  }
+
+  const bool read_ok =
+      fread(records, sizeof(*records), node_count, file) == node_count;
+  fclose(file);
+  if (!read_ok) {
+    free(records);
+    free(nodes);
+    return -1;
+  }
+
+  for (size_t i = 0; i < node_count; ++i) {
+    if (records[i].point_index >= cloud->count || records[i].axis < 0 || records[i].axis > 2) {
+      for (size_t j = 0; j < i; ++j) {
+        free(nodes[j]);
+      }
+      free(records);
+      free(nodes);
+      return -1;
+    }
+    nodes[i] = calloc(1, sizeof(*nodes[i]));
+    if (nodes[i] == NULL) {
+      for (size_t j = 0; j < i; ++j) {
+        free(nodes[j]);
+      }
+      free(records);
+      free(nodes);
+      return -1;
+    }
+    nodes[i]->point = &cloud->points[records[i].point_index];
+    nodes[i]->axis = records[i].axis;
+  }
+
+  for (size_t i = 0; i < node_count; ++i) {
+    if ((records[i].left_index >= (int64_t) node_count) ||
+        (records[i].right_index >= (int64_t) node_count)) {
+      for (size_t j = 0; j < node_count; ++j) {
+        free(nodes[j]);
+      }
+      free(records);
+      free(nodes);
+      return -1;
+    }
+    nodes[i]->left =
+        records[i].left_index >= 0 ? nodes[records[i].left_index] : NULL;
+    nodes[i]->right =
+        records[i].right_index >= 0 ? nodes[records[i].right_index] : NULL;
+  }
+
+  free(records);
+  *root_out = node_count == 0 ? NULL : nodes[0];
+  free(nodes);
+  return 0;
+}
+
 static void free_kd_tree(KdNode *node) {
   if (node == NULL) {
     return;
@@ -1458,10 +1718,14 @@ static void kd_search(const KdNode *node, SearchState *state) {
     const double dy = (state->axes_mask & 2u) != 0u ? point->y - state->target.y : 0.0;
     const double dz = (state->axes_mask & 4u) != 0u ? point->z - state->target.z : 0.0;
 
+    const double inv_x = dx >= 0.0 ? state->inv_x_positive : state->inv_x_negative;
+    const double inv_y = dy >= 0.0 ? state->inv_y_positive : state->inv_y_negative;
+    const double inv_z = dz >= 0.0 ? state->inv_z_positive : state->inv_z_negative;
+
     const double d2e = dx * dx + dy * dy + dz * dz;
-    const double ndx = dx * state->inv_sx;
-    const double ndy = dy * state->inv_sy;
-    const double ndz = dz * state->inv_sz;
+    const double ndx = dx * inv_x;
+    const double ndy = dy * inv_y;
+    const double ndz = dz * inv_z;
     const double d2n = ndx * ndx + ndy * ndy + ndz * ndz;
 
     if ((!state->cutoff_active || d2n <= 1.0) &&
@@ -1501,9 +1765,11 @@ static void kd_search(const KdNode *node, SearchState *state) {
   }
 
   const double diff_norm =
-      node->axis == 0 ? diff * state->inv_sx
-      : node->axis == 1 ? diff * state->inv_sy
-                        : diff * state->inv_sz;
+      node->axis == 0
+          ? diff * (diff >= 0.0 ? state->inv_x_negative : state->inv_x_positive)
+      : node->axis == 1
+          ? diff * (diff >= 0.0 ? state->inv_y_negative : state->inv_y_positive)
+          : diff * (diff >= 0.0 ? state->inv_z_negative : state->inv_z_positive);
   if (diff_norm * diff_norm < state->best_nd2) {
     kd_search(far, state);
   }
@@ -1512,9 +1778,12 @@ static void kd_search(const KdNode *node, SearchState *state) {
 static const SlicePoint *nearest_point(
     const KdNode *root,
     Vec3 target,
-    double sx,
-    double sy,
-    double sz,
+    double x_positive,
+    double x_negative,
+    double y_positive,
+    double y_negative,
+    double z_positive,
+    double z_negative,
     double *distance_out) {
   if (root == NULL) {
     return NULL;
@@ -1526,9 +1795,12 @@ static const SlicePoint *nearest_point(
   state.best_point = NULL;
   state.best_nd2 = 1.0;
   state.best_euclid_d2 = INFINITY;
-  state.inv_sx = 1.0 / sx;
-  state.inv_sy = 1.0 / sy;
-  state.inv_sz = 1.0 / sz;
+  state.inv_x_positive = 1.0 / x_positive;
+  state.inv_x_negative = 1.0 / x_negative;
+  state.inv_y_positive = 1.0 / y_positive;
+  state.inv_y_negative = 1.0 / y_negative;
+  state.inv_z_positive = 1.0 / z_positive;
+  state.inv_z_negative = 1.0 / z_negative;
   state.cutoff_active = true;
   state.axes_mask = 1u | 2u | 4u;
 

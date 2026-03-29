@@ -20,6 +20,8 @@
 typedef struct {
   const char *input_path;
   const char *output_dir;
+  const char *config_path;
+  const char *kd_cache_path;
   double dpi;
   double layer_height_nm;
   double multiplier;
@@ -30,7 +32,12 @@ typedef struct {
   bool y_in_set;
   bool z_in_set;
   double longest_side_in;
-  double voxel_radius_inches;
+  double voxel_radius_x_positive_inches;
+  double voxel_radius_x_negative_inches;
+  double voxel_radius_y_positive_inches;
+  double voxel_radius_y_negative_inches;
+  double voxel_radius_z_positive_inches;
+  double voxel_radius_z_negative_inches;
   double padding_ratio;
   uint64_t log_interval;
 } SliceOptions;

@@ -132,19 +132,21 @@ The generator can also be imported and customized from another script if you wan
 Build:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y libcpptoml-dev
 make slice
 ```
 
 Command:
 
 ```bash
-./bin/slice [options] <input.ply> <output_dir>
+./bin/slice --config <slice.toml> [input.ply] [output_dir]
 ```
 
 Example:
 
 ```bash
-./bin/slice data/sphere.ply sphere/sphere_out
+./bin/slice --config slice/slice.example.toml
 ```
 
 What the native slicer does:
@@ -158,23 +160,15 @@ What the native slicer does:
 
 Operational details:
 
+- slicer settings now live in a TOML config file; see [`slice/slice.example.toml`](./slice/slice.example.toml)
+- optional top-level `kd_cache = "path/to/tree.kdcache"` reuses a saved kd-tree topology and writes it on first build
 - the output directory is created if missing
 - the input file must exist
+- CLI positional paths can override `input.path` and `output.directory` from the TOML file
 - every layer is generated sequentially
 - the background is flood-filled to `rgba(247, 247, 247, 128)` before point rendering
-- per-pixel occupancy is based on nearest-point distance against a hard-coded voxel radius
+- per-pixel occupancy is based on nearest-point distance against six directional voxel radii
 - colored pixels render fully opaque; only the flood-filled background remains semi-transparent
-
-Relevant flags:
-
-- `--log-interval`
-- `--dpi`
-- `--layer-height-nm`
-- `--multiplier`
-- `--x-in`, `--y-in`, `--z-in`
-- `--longest-side-in` for any dimension set to `auto`
-- `--voxel-radius-inches`
-- `--padding-ratio`
 
 Performance and scaling:
 
