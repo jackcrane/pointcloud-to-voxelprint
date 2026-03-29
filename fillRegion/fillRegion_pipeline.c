@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 typedef struct {
   uint32_t width;
@@ -80,6 +81,8 @@ static int inflate_stored_blocks(
     size_t compressed_size,
     uint8_t *raw_out,
     size_t raw_size);
+static double now_seconds(void);
+static void format_duration(double seconds, char *buffer, size_t buffer_size);
 
 int run_fill_region(const FillRegionOptions *options) {
   LayerFile *layers = NULL;
@@ -88,6 +91,7 @@ int run_fill_region(const FillRegionOptions *options) {
   size_t xy_count = 0;
   PolygonKeyframe *keyframes = NULL;
   size_t keyframe_count = 0;
+  const double start_time = now_seconds();
 
   if (options == NULL) {
     fprintf(stderr, "Missing fillRegion options.\n");
@@ -195,6 +199,25 @@ int run_fill_region(const FillRegionOptions *options) {
     free_image(&image);
     free_layer_polygon(options->mode, layer_polygon, xy_polygon);
     free(output_path);
+
+    {
+      const size_t completed = i + 1u;
+      const double elapsed = now_seconds() - start_time;
+      const double average_per_layer = completed > 0u ? elapsed / (double) completed : 0.0;
+      const double remaining = average_per_layer * (double) (layer_count - completed);
+      char elapsed_text[32];
+      char remaining_text[32];
+      format_duration(elapsed, elapsed_text, sizeof(elapsed_text));
+      format_duration(remaining, remaining_text, sizeof(remaining_text));
+      printf(
+          "Layer %zu/%zu (%s)  elapsed=%s  eta=%s\n",
+          completed,
+          layer_count,
+          layers[i].name,
+          elapsed_text,
+          remaining_text);
+      fflush(stdout);
+    }
   }
 
   free(xy_polygon);
@@ -1089,4 +1112,32 @@ static int inflate_stored_blocks(
   return adler32_bytes(raw_out, raw_size) == read_u32_be(compressed + compressed_size - 4u)
              ? 0
              : -1;
+}
+
+static double now_seconds(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    return 0.0;
+  }
+  return (double) ts.tv_sec + (double) ts.tv_nsec / 1000000000.0;
+}
+
+static void format_duration(double seconds, char *buffer, size_t buffer_size) {
+  if (buffer == NULL || buffer_size == 0u) {
+    return;
+  }
+
+  if (seconds < 0.0) {
+    seconds = 0.0;
+  }
+
+  const unsigned long total_seconds = (unsigned long) (seconds + 0.5);
+  const unsigned long hours = total_seconds / 3600ul;
+  const unsigned long minutes = (total_seconds % 3600ul) / 60ul;
+  const unsigned long secs = total_seconds % 60ul;
+  if (hours > 0ul) {
+    snprintf(buffer, buffer_size, "%luh%02lum%02lus", hours, minutes, secs);
+    return;
+  }
+  snprintf(buffer, buffer_size, "%lum%02lus", minutes, secs);
 }
