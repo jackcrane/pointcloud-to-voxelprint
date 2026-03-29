@@ -15,6 +15,7 @@ The main workflows in this repository are:
 - `index.js`: original JavaScript slicer reference
 - `slice/`: native C rewrite of the PLY-to-PNG slicer, built as `bin/slice`
 - `bin/xsection`: native cross-section extractor for existing slice stacks
+- `bin/fillRegion`: native region painter for existing slice stacks
 - `translate/translate.c`: stream a colorized LAS into an ASCII PLY
 - `quantize/quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
 - `chamfer.js`: remove material from the edges/corners of an RGBA PNG slice stack using a physical chamfer radius
@@ -214,6 +215,47 @@ Important behaviors:
 - the output height equals the number of slice PNGs found in the configured output directory
 - the output width is the source width for `xz` and the source height for `yz`
 - the PNG reader currently supports the uncompressed RGBA PNGs written by the native slicer
+
+### 2b. Fill a Polygon Region Across an Existing Slice Stack
+
+Build:
+
+```bash
+make fillRegion
+```
+
+Command:
+
+```bash
+./bin/fillRegion --config <fillRegion.toml>
+```
+
+Example:
+
+```bash
+./bin/fillRegion --config fillRegion/fillRegion.example.toml
+```
+
+What `./bin/fillRegion` does:
+
+- reads `input.directory`, `output.directory`, `color`, and `[[points]]` from its TOML config
+- scans `out_<layer>.png` files from the input directory and writes the processed stack to the output directory
+- preserves layer filenames and image dimensions
+- copies untouched layers through unchanged
+- fills affected layers by overwriting pixels inside the configured polygon with the configured RGBA color
+
+Point modes:
+
+- XY mode: omit `z` from every point to fill the same 2D polygon on every layer
+- XYZ mode: include `z` on every point to define polygon keyframes by layer number
+- in XYZ mode, points are grouped by shared `z` and interpolated between adjacent z-groups
+- every z-group must contain the same number of vertices in the same winding order
+
+Important behaviors:
+
+- the PNG reader supports the same uncompressed RGBA PNGs written by the native slicer
+- layers outside the XYZ keyframe range are copied without painting
+- `z` is interpreted as the source layer number, while `x` and `y` are measured from the image top-left
 
 ### 3. Translate a Colorized LAS to PLY
 

@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>Image Sequence Scrubber</title>
+    <style>
+      :root {
+        --bg: #111;
+        --panel: #1a1a1a;
+        --panel-2: #202020;
+        --border: #444;
+        --text: #fff;
+        --muted: #bdbdbd;
+        --accent: #ff3b30;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        max-width: 1200px;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+      }
+
+      .coords,
+      .status,
+      .annotation-status {
+        font-size: 16px;
+        font-weight: bold;
+      }
+
+      .status,
+      .annotation-status {
+        color: var(--muted);
+      }
+
+      .canvas-wrap {
+        position: relative;
+        display: inline-block;
+        width: fit-content;
+        max-width: 100%;
+      }
+
+      canvas {
+        display: block;
+        border: 1px solid var(--border);
+        background: #000;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        cursor: crosshair;
+        max-width: 100%;
+      }
+
+      .scrubber {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+      }
+
+      input[type="range"] {
+        flex: 1;
+      }
+
+      .frame-label {
+        min-width: 160px;
+        text-align: right;
+        font-weight: bold;
+      }
+
+      .tooltip {
+        position: absolute;
+        display: none;
+        pointer-events: none;
+        z-index: 10;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.92);
+        color: #fff;
+        border: 1px solid #666;
+        border-radius: 6px;
+        font-size: 13px;
+        white-space: nowrap;
+        transform: translate(12px, 12px);
+      }
+
+      .help {
+        padding: 12px;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .help strong {
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="toolbar">
+        <input id="folderInput" type="file" webkitdirectory multiple />
+
+        <div class="coords">
+          X: <span id="mouseX">-</span>
+          Y: <span id="mouseY">-</span>
+        </div>
+
+        <div class="status">
+          Loaded: <span id="loadedCount">0</span>/<span id="totalCount">0</span>
+        </div>
+
+        <div class="annotation-status">
+          Points on frame: <span id="annotationCount">0</span>
+        </div>
+      </div>
+
+      <div class="canvas-wrap" id="canvasWrap">
+        <canvas id="canvas"></canvas>
+        <div id="tooltip" class="tooltip"></div>
+      </div>
+
+      <div class="scrubber">
+        <input id="scrubber" type="range" min="0" max="0" value="0" />
+        <div class="frame-label">
+          Frame: <span id="frameIndex">0</span>
+        </div>
+      </div>
+
+      <div class="help">
+        <strong>Controls:</strong>
+        Select a folder containing files named <code>out_n.png</code>.
+        Scrub through frames with the slider.
+        Move the mouse over the canvas to read image coordinates.
+        Left-click to add a red 4mm marker.
+        Hover a marker to view coordinates.
+        Click and drag a marker to move it.
+        Right-click a marker to delete it.
+      </div>
+    </div>
+
+    <script type="module">
+      const folderInput = document.getElementById("folderInput");
+      const canvasWrap = document.getElementById("canvasWrap");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const scrubber = document.getElementById("scrubber");
+      const frameIndex = document.getElementById("frameIndex");
+      const mouseX = document.getElementById("mouseX");
+      const mouseY = document.getElementById("mouseY");
+      const loadedCount = document.getElementById("loadedCount");
+      const totalCount = document.getElementById("totalCount");
+      const annotationCount = document.getElementById("annotationCount");
+      const tooltip = document.getElementById("tooltip");
+
+      ctx.imageSmoothingEnabled = false;
+
+      let files = [];
+      let cache = new Map();
+      let currentFrame = 0;
+
+      let currentRequestId = 0;
+      let rafPending = false;
+      let pendingIndex = 0;
+
+      let preloadIndex = 0;
+      let isPreloading = false;
+      let preloadGeneration = 0;
+      let loadedImageCount = 0;
+
+      let lastPointerCanvasX = null;
+      let lastPointerCanvasY = null;
+      let lastPointerClientX = null;
+      let lastPointerClientY = null;
+
+      let hoveredAnnotationIndex = -1;
+      let draggingAnnotationIndex = -1;
+      let dragOffsetX = 0;
+      let dragOffsetY = 0;
+      let suppressClickAfterDrag = false;
+      let pointerMovedDuringDrag = false;
+
+      const annotationsByFrame = new Map();
+
+      const MM_TO_CSS_PX = 96 / 25.4;
+      const MARKER_DIAMETER_MM = 4;
+      const MARKER_RADIUS_CSS_PX = (MARKER_DIAMETER_MM * MM_TO_CSS_PX) / 2;
+
+      const extractIndex = (name) => {
+        const match = name.match(/out_(\d+)\.png$/i);
+        return match ? parseInt(match[1], 10) : -1;
+      };
+
+      const getAnnotationsForFrame = (frame) => {
+        if (!annotationsByFrame.has(frame)) {
+          annotationsByFrame.set(frame, []);
+        }
+        return annotationsByFrame.get(frame);
+      };
+
+      const updateAnnotationCount = () => {
+        annotationCount.textContent = getAnnotationsForFrame(currentFrame).length;
+      };
+
+      const updateLoadedCount = () => {
+        loadedCount.textContent = String(loadedImageCount);
+        totalCount.textContent = String(files.length);
+      };
+
+      const getCanvasScale = () => {
+        const rect = canvas.getBoundingClientRect();
+
+        return {
+          rect,
+          scaleX: rect.width === 0 ? 1 : canvas.width / rect.width,
+          scaleY: rect.height === 0 ? 1 : canvas.height / rect.height,
+        };
+      };
+
+      const getMarkerRadiusInCanvasPixels = () => {
+        const { rect, scaleX, scaleY } = getCanvasScale();
+        if (rect.width === 0 || rect.height === 0) {
+          return MARKER_RADIUS_CSS_PX;
+        }
+
+        const radiusX = MARKER_RADIUS_CSS_PX * scaleX;
+        const radiusY = MARKER_RADIUS_CSS_PX * scaleY;
+
+        return Math.max(radiusX, radiusY);
+      };
+
+      const clamp = (value, min, max) => {
+        return Math.min(max, Math.max(min, value));
+      };
+
+      const canvasPointFromMouseEvent = (event) => {
+        const { rect, scaleX, scaleY } = getCanvasScale();
+
+        return {
+          x: (event.clientX - rect.left) * scaleX,
+          y: (event.clientY - rect.top) * scaleY,
+        };
+      };
+
+      const showTooltip = (clientX, clientY, annotation) => {
+        tooltip.style.display = "block";
+        tooltip.style.left = `${clientX - canvasWrap.getBoundingClientRect().left}px`;
+        tooltip.style.top = `${clientY - canvasWrap.getBoundingClientRect().top}px`;
+        tooltip.textContent = `(${Math.round(annotation.x)}, ${Math.round(annotation.y)})`;
+      };
+
+      const hideTooltip = () => {
+        tooltip.style.display = "none";
+      };
+
+      const findAnnotationIndexAt = (x, y) => {
+        const annotations = getAnnotationsForFrame(currentFrame);
+        const radius = getMarkerRadiusInCanvasPixels();
+
+        for (let i = annotations.length - 1; i >= 0; i--) {
+          const point = annotations[i];
+          const dx = x - point.x;
+          const dy = y - point.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist <= radius) {
+            return i;
+          }
+        }
+
+        return -1;
+      };
+
+      const createImageRecord = (file) => {
+        const url = URL.createObjectURL(file);
+
+        const record = {
+          file,
+          url,
+          img: new Image(),
+          loaded: false,
+          errored: false,
+          loadPromise: null,
+        };
+
+        record.img.decoding = "async";
+
+        record.loadPromise = new Promise((resolve) => {
+          record.img.onload = () => {
+            if (!record.loaded) {
+              record.loaded = true;
+              loadedImageCount += 1;
+              updateLoadedCount();
+            }
+            resolve(record);
+          };
+
+          record.img.onerror = () => {
+            record.errored = true;
+            resolve(record);
+          };
+        });
+
+        record.img.src = url;
+
+        return record;
+      };
+
+      const loadImage = (file) => {
+        if (cache.has(file.name)) {
+          return cache.get(file.name);
+        }
+
+        const record = createImageRecord(file);
+        cache.set(file.name, record);
+        return record;
+      };
+
+      const drawAnnotations = () => {
+        const annotations = getAnnotationsForFrame(currentFrame);
+        const radius = getMarkerRadiusInCanvasPixels();
+
+        for (let i = 0; i < annotations.length; i++) {
+          const point = annotations[i];
+          const isHovered = i === hoveredAnnotationIndex;
+          const isDragging = i === draggingAnnotationIndex;
+
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(255, 0, 0, 0.28)";
+          ctx.fill();
+          ctx.lineWidth = isHovered || isDragging ? Math.max(2, radius * 0.4) : Math.max(1.5, radius * 0.28);
+          ctx.strokeStyle = "#ff3b30";
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, Math.max(1.5, radius * 0.22), 0, Math.PI * 2);
+          ctx.fillStyle = "#ff3b30";
+          ctx.fill();
+        }
+      };
+
+      const drawCurrentState = (img, index) => {
+        canvas.width = img.width;
+        canvas.height = img.height;
+
+        ctx.imageSmoothingEnabled = false;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+
+        currentFrame = index;
+        frameIndex.textContent = String(index);
+
+        drawAnnotations();
+        updateAnnotationCount();
+      };
+
+      const refreshCanvas = () => {
+        const file = files[currentFrame];
+        if (!file) return;
+
+        const record = loadImage(file);
+        if (record.loaded) {
+          drawCurrentState(record.img, currentFrame);
+        }
+      };
+
+      const updateHoverState = (clientX, clientY, canvasX, canvasY) => {
+        lastPointerClientX = clientX;
+        lastPointerClientY = clientY;
+        lastPointerCanvasX = canvasX;
+        lastPointerCanvasY = canvasY;
+
+        if (!files.length) {
+          hoveredAnnotationIndex = -1;
+          hideTooltip();
+          refreshCanvas();
+          return;
+        }
+
+        const hitIndex = findAnnotationIndexAt(canvasX, canvasY);
+
+        if (hitIndex !== hoveredAnnotationIndex) {
+          hoveredAnnotationIndex = hitIndex;
+          refreshCanvas();
+        }
+
+        if (hitIndex >= 0) {
+          const annotation = getAnnotationsForFrame(currentFrame)[hitIndex];
+          showTooltip(clientX, clientY, annotation);
+          canvas.style.cursor = draggingAnnotationIndex >= 0 ? "grabbing" : "pointer";
+        } else {
+          hideTooltip();
+          canvas.style.cursor = "crosshair";
+        }
+      };
+
+      const drawFrame = (index) => {
+        const requestId = ++currentRequestId;
+        const file = files[index];
+        if (!file) return;
+
+        const record = loadImage(file);
+
+        const render = () => {
+          if (requestId !== currentRequestId) return;
+          if (record.errored) return;
+
+          drawCurrentState(record.img, index);
+
+          if (
+            lastPointerClientX !== null &&
+            lastPointerClientY !== null &&
+            lastPointerCanvasX !== null &&
+            lastPointerCanvasY !== null
+          ) {
+            const hitIndex = findAnnotationIndexAt(lastPointerCanvasX, lastPointerCanvasY);
+            hoveredAnnotationIndex = hitIndex;
+
+            if (hitIndex >= 0) {
+              const annotation = getAnnotationsForFrame(currentFrame)[hitIndex];
+              showTooltip(lastPointerClientX, lastPointerClientY, annotation);
+              canvas.style.cursor = draggingAnnotationIndex >= 0 ? "grabbing" : "pointer";
+              refreshCanvas();
+            } else {
+              hideTooltip();
+              canvas.style.cursor = draggingAnnotationIndex >= 0 ? "grabbing" : "crosshair";
+            }
+          }
+        };
+
+        if (!record.loaded) {
+          record.loadPromise.then(render);
+        } else {
+          render();
+        }
+      };
+
+      const scheduleDraw = (index) => {
+        pendingIndex = index;
+
+        if (rafPending) return;
+        rafPending = true;
+
+        requestAnimationFrame(() => {
+          rafPending = false;
+          drawFrame(pendingIndex);
+        });
+      };
+
+      const waitForIdle = () => {
+        return new Promise((resolve) => {
+          if ("requestIdleCallback" in window) {
+            window.requestIdleCallback(() => resolve(), { timeout: 100 });
+          } else {
+            setTimeout(resolve, 0);
+          }
+        });
+      };
+
+      const preloadAll = async (generation) => {
+        if (isPreloading) return;
+        isPreloading = true;
+
+        const BATCH_SIZE = 2;
+
+        while (preloadIndex < files.length && generation === preloadGeneration) {
+          for (
+            let i = 0;
+            i < BATCH_SIZE && preloadIndex < files.length && generation === preloadGeneration;
+            i++
+          ) {
+            const file = files[preloadIndex++];
+            const record = loadImage(file);
+
+            if (!record.loaded && !record.errored) {
+              await record.loadPromise;
+            }
+          }
+
+          if (generation !== preloadGeneration) {
+            break;
+          }
+
+          await waitForIdle();
+        }
+
+        isPreloading = false;
+      };
+
+      folderInput.addEventListener("change", (event) => {
+        const pickedFiles = Array.from(event.target.files || []);
+
+        files = pickedFiles
+          .filter((file) => /^out_\d+\.png$/i.test(file.name))
+          .sort((a, b) => extractIndex(a.name) - extractIndex(b.name));
+
+        for (const record of cache.values()) {
+          URL.revokeObjectURL(record.url);
+        }
+
+        cache.clear();
+        annotationsByFrame.clear();
+
+        currentFrame = 0;
+        preloadIndex = 0;
+        isPreloading = false;
+        preloadGeneration += 1;
+        loadedImageCount = 0;
+
+        hoveredAnnotationIndex = -1;
+        draggingAnnotationIndex = -1;
+        dragOffsetX = 0;
+        dragOffsetY = 0;
+        suppressClickAfterDrag = false;
+        pointerMovedDuringDrag = false;
+
+        hideTooltip();
+        updateLoadedCount();
+        updateAnnotationCount();
+
+        scrubber.max = String(Math.max(0, files.length - 1));
+        scrubber.value = "0";
+        frameIndex.textContent = "0";
+
+        if (files.length > 0) {
+          drawFrame(0);
+          preloadAll(preloadGeneration);
+        } else {
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+      });
+
+      scrubber.addEventListener("input", (event) => {
+        const index = parseInt(event.target.value, 10) || 0;
+        hoveredAnnotationIndex = -1;
+        hideTooltip();
+        scheduleDraw(index);
+      });
+
+      canvas.addEventListener("mousemove", (event) => {
+        if (!files.length || canvas.width === 0 || canvas.height === 0) {
+          mouseX.textContent = "-";
+          mouseY.textContent = "-";
+          return;
+        }
+
+        const point = canvasPointFromMouseEvent(event);
+        const x = clamp(point.x, 0, canvas.width);
+        const y = clamp(point.y, 0, canvas.height);
+
+        mouseX.textContent = String(Math.floor(x));
+        mouseY.textContent = String(Math.floor(y));
+
+        if (draggingAnnotationIndex >= 0) {
+          pointerMovedDuringDrag = true;
+
+          const annotations = getAnnotationsForFrame(currentFrame);
+          const annotation = annotations[draggingAnnotationIndex];
+
+          annotation.x = clamp(x - dragOffsetX, 0, canvas.width);
+          annotation.y = clamp(y - dragOffsetY, 0, canvas.height);
+
+          refreshCanvas();
+          showTooltip(event.clientX, event.clientY, annotation);
+          canvas.style.cursor = "grabbing";
+          return;
+        }
+
+        updateHoverState(event.clientX, event.clientY, x, y);
+      });
+
+      canvas.addEventListener("mouseleave", () => {
+        mouseX.textContent = "-";
+        mouseY.textContent = "-";
+        hoveredAnnotationIndex = -1;
+        hideTooltip();
+
+        if (draggingAnnotationIndex < 0) {
+          canvas.style.cursor = "crosshair";
+          refreshCanvas();
+        }
+      });
+
+      canvas.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        if (!files.length || canvas.width === 0 || canvas.height === 0) return;
+
+        const point = canvasPointFromMouseEvent(event);
+        const x = clamp(point.x, 0, canvas.width);
+        const y = clamp(point.y, 0, canvas.height);
+
+        const hitIndex = findAnnotationIndexAt(x, y);
+
+        if (hitIndex >= 0) {
+          const annotations = getAnnotationsForFrame(currentFrame);
+          const annotation = annotations[hitIndex];
+
+          draggingAnnotationIndex = hitIndex;
+          hoveredAnnotationIndex = hitIndex;
+          dragOffsetX = x - annotation.x;
+          dragOffsetY = y - annotation.y;
+          pointerMovedDuringDrag = false;
+          suppressClickAfterDrag = false;
+
+          canvas.style.cursor = "grabbing";
+          showTooltip(event.clientX, event.clientY, annotation);
+          refreshCanvas();
+
+          event.preventDefault();
+        }
+      });
+
+      window.addEventListener("mouseup", () => {
+        if (draggingAnnotationIndex >= 0) {
+          if (pointerMovedDuringDrag) {
+            suppressClickAfterDrag = true;
+          }
+
+          draggingAnnotationIndex = -1;
+          dragOffsetX = 0;
+          dragOffsetY = 0;
+          pointerMovedDuringDrag = false;
+
+          if (
+            lastPointerClientX !== null &&
+            lastPointerClientY !== null &&
+            lastPointerCanvasX !== null &&
+            lastPointerCanvasY !== null
+          ) {
+            updateHoverState(
+              lastPointerClientX,
+              lastPointerClientY,
+              lastPointerCanvasX,
+              lastPointerCanvasY,
+            );
+          } else {
+            canvas.style.cursor = "crosshair";
+            refreshCanvas();
+          }
+        }
+      });
+
+      canvas.addEventListener("click", (event) => {
+        if (event.button !== 0) return;
+        if (!files.length || canvas.width === 0 || canvas.height === 0) return;
+
+        if (suppressClickAfterDrag) {
+          suppressClickAfterDrag = false;
+          return;
+        }
+
+        const point = canvasPointFromMouseEvent(event);
+        const x = clamp(point.x, 0, canvas.width);
+        const y = clamp(point.y, 0, canvas.height);
+
+        const hitIndex = findAnnotationIndexAt(x, y);
+        if (hitIndex >= 0) {
+          return;
+        }
+
+        const annotations = getAnnotationsForFrame(currentFrame);
+        annotations.push({ x, y });
+
+        hoveredAnnotationIndex = annotations.length - 1;
+        updateAnnotationCount();
+        refreshCanvas();
+
+        const annotation = annotations[hoveredAnnotationIndex];
+        showTooltip(event.clientX, event.clientY, annotation);
+      });
+
+      canvas.addEventListener("contextmenu", (event) => {
+        if (!files.length || canvas.width === 0 || canvas.height === 0) return;
+
+        const point = canvasPointFromMouseEvent(event);
+        const x = clamp(point.x, 0, canvas.width);
+        const y = clamp(point.y, 0, canvas.height);
+
+        const hitIndex = findAnnotationIndexAt(x, y);
+
+        if (hitIndex >= 0) {
+          event.preventDefault();
+
+          const annotations = getAnnotationsForFrame(currentFrame);
+          annotations.splice(hitIndex, 1);
+
+          hoveredAnnotationIndex = -1;
+          draggingAnnotationIndex = -1;
+          hideTooltip();
+          updateAnnotationCount();
+          refreshCanvas();
+          canvas.style.cursor = "crosshair";
+        }
+      });
+
+      window.addEventListener("resize", () => {
+        refreshCanvas();
+
+        if (
+          hoveredAnnotationIndex >= 0 &&
+          lastPointerClientX !== null &&
+          lastPointerClientY !== null
+        ) {
+          const annotations = getAnnotationsForFrame(currentFrame);
+          const annotation = annotations[hoveredAnnotationIndex];
+          if (annotation) {
+            showTooltip(lastPointerClientX, lastPointerClientY, annotation);
+          }
+        }
+      });
+
+      updateLoadedCount();
+      updateAnnotationCount();
+    </script>
+  </body>
+</html>

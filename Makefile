@@ -17,6 +17,8 @@ ASCII_PLY_DIR = ascii_ply
 SLICE_DIR = slice
 SLICE_BIN = bin/slice
 XSECTION_BIN = bin/xsection
+FILL_REGION_DIR = fillRegion
+FILL_REGION_BIN = bin/fillRegion
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -100,6 +102,12 @@ XSECTION_OBJS = \
 	$(SLICE_DIR)/xsection_pipeline.o \
 	$(SLICE_DIR)/slice_toml.o
 
+FILL_REGION_OBJS = \
+	$(FILL_REGION_DIR)/fillRegion.o \
+	$(FILL_REGION_DIR)/fillRegion_cli.o \
+	$(FILL_REGION_DIR)/fillRegion_pipeline.o \
+	$(FILL_REGION_DIR)/fillRegion_toml.o
+
 SLICE_HDRS = \
 	$(SLICE_DIR)/slice_cli.h \
 	$(SLICE_DIR)/slice_common.h \
@@ -113,7 +121,13 @@ XSECTION_HDRS = \
 	$(SLICE_DIR)/slice_common.h \
 	$(SLICE_DIR)/slice_toml.h
 
-.PHONY: quantize translate rotate crop slice xsection clean
+FILL_REGION_HDRS = \
+	$(FILL_REGION_DIR)/fillRegion_cli.h \
+	$(FILL_REGION_DIR)/fillRegion_common.h \
+	$(FILL_REGION_DIR)/fillRegion_pipeline.h \
+	$(FILL_REGION_DIR)/fillRegion_toml.h
+
+.PHONY: quantize translate rotate crop slice xsection fillRegion clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
@@ -121,6 +135,7 @@ rotate: $(ROTATE_BIN)
 crop: $(CROP_BIN)
 slice: $(SLICE_BIN)
 xsection: $(XSECTION_BIN)
+fillRegion: $(FILL_REGION_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -139,6 +154,9 @@ $(SLICE_BIN): $(SLICE_OBJS) $(SLICE_HDRS) | bin
 
 $(XSECTION_BIN): $(XSECTION_OBJS) $(XSECTION_HDRS) | bin
 	$(CXX) $(CXXFLAGS) -o $@ $(XSECTION_OBJS) $(LDFLAGS) $(LDLIBS)
+
+$(FILL_REGION_BIN): $(FILL_REGION_OBJS) $(FILL_REGION_HDRS) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $(FILL_REGION_OBJS) $(LDFLAGS) $(LDLIBS)
 
 $(SLICE_DIR)/slice.o: $(SLICE_DIR)/slice.c $(SLICE_HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -161,10 +179,22 @@ $(SLICE_DIR)/xsection_cli.o: $(SLICE_DIR)/xsection_cli.c $(XSECTION_HDRS)
 $(SLICE_DIR)/xsection_pipeline.o: $(SLICE_DIR)/xsection_pipeline.c $(XSECTION_HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(FILL_REGION_DIR)/fillRegion.o: $(FILL_REGION_DIR)/fillRegion.c $(FILL_REGION_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(FILL_REGION_DIR)/fillRegion_cli.o: $(FILL_REGION_DIR)/fillRegion_cli.c $(FILL_REGION_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(FILL_REGION_DIR)/fillRegion_pipeline.o: $(FILL_REGION_DIR)/fillRegion_pipeline.c $(FILL_REGION_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(FILL_REGION_DIR)/fillRegion_toml.o: $(FILL_REGION_DIR)/fillRegion_toml.cpp $(FILL_REGION_HDRS)
+	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
+
 bin:
 	mkdir -p $@
 
 clean:
-	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) *.o \
+	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) $(FILL_REGION_BIN) *.o \
 		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
-		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o
+		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o
