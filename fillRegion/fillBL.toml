@@ -6,11 +6,11 @@
 
 [input]
 # Directory containing out_<layer>.png files.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid-shaped"
 
 [output]
 # Directory where the processed PNG stack will be written.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid-shaped"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid-shaped2"
 
 # Fill color as [r, g, b] or [r, g, b, a].
 color = [0, 0, 0]
@@ -19,20 +19,20 @@ color = [0, 0, 0]
 # Omit z to fill the same polygon on every layer.
 #
 [[points]]
-x = 750
-y = 421
+x = 0
+y = 195
 
 [[points]]
-x = 639
-y = 19
+x = 31
+y = 397
 
 [[points]]
-x = 109
-y = 0
+x = 37
+y = 431
 
 [[points]]
-x = 750
-y = 0
+x = 0
+y = 431
 
 # XYZ mode:
 # Group points by z layer to define polygon keyframes.

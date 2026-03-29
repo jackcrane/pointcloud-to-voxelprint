@@ -1,0 +1,9 @@
+from = "bottom"
+
+[input]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0"
+
+[output]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom"
+set_color = [255,255,255]
+replace_color = [247, 247, 247, 128]

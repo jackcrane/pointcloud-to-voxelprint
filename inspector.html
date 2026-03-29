@@ -131,14 +131,11 @@
         <div class="coords">
           X: <span id="mouseX">-</span>
           Y: <span id="mouseY">-</span>
+            RGBA: <span id="mouseColor">-</span>
         </div>
 
         <div class="status">
           Loaded: <span id="loadedCount">0</span>/<span id="totalCount">0</span>
-        </div>
-
-        <div class="annotation-status">
-          Points on frame: <span id="annotationCount">0</span>
         </div>
       </div>
 
@@ -177,8 +174,9 @@
       const mouseY = document.getElementById("mouseY");
       const loadedCount = document.getElementById("loadedCount");
       const totalCount = document.getElementById("totalCount");
-      const annotationCount = document.getElementById("annotationCount");
+      const annotationCount = document.getElementById("annotationCount") || { textContent: "" };
       const tooltip = document.getElementById("tooltip");
+      const mouseColor = document.getElementById("mouseColor");
 
       ctx.imageSmoothingEnabled = false;
 
@@ -570,6 +568,7 @@
         if (!files.length || canvas.width === 0 || canvas.height === 0) {
           mouseX.textContent = "-";
           mouseY.textContent = "-";
+          mouseColor.textContent = "-";
           return;
         }
 
@@ -579,6 +578,16 @@
 
         mouseX.textContent = String(Math.floor(x));
         mouseY.textContent = String(Math.floor(y));
+
+        const px = Math.floor(x);
+        const py = Math.floor(y);
+
+        if (px >= 0 && py >= 0 && px < canvas.width && py < canvas.height) {
+        const data = ctx.getImageData(px, py, 1, 1).data;
+        mouseColor.textContent = `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3]})`;
+        } else {
+        mouseColor.textContent = "-";
+        }
 
         if (draggingAnnotationIndex >= 0) {
           pointerMovedDuringDrag = true;
@@ -601,6 +610,7 @@
       canvas.addEventListener("mouseleave", () => {
         mouseX.textContent = "-";
         mouseY.textContent = "-";
+        mouseColor.textContent = "-";
         hoveredAnnotationIndex = -1;
         hideTooltip();
 

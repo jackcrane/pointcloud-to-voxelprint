@@ -19,6 +19,8 @@ SLICE_BIN = bin/slice
 XSECTION_BIN = bin/xsection
 FILL_REGION_DIR = fillRegion
 FILL_REGION_BIN = bin/fillRegion
+SHADOW_DIR = shadow
+SHADOW_BIN = bin/shadow
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -127,7 +129,24 @@ FILL_REGION_HDRS = \
 	$(FILL_REGION_DIR)/fillRegion_pipeline.h \
 	$(FILL_REGION_DIR)/fillRegion_toml.h
 
-.PHONY: quantize translate rotate crop slice xsection fillRegion clean
+SHADOW_SRCS = \
+	$(SHADOW_DIR)/shadow.c \
+	$(SHADOW_DIR)/shadow_cli.c \
+	$(SHADOW_DIR)/shadow_pipeline.c
+
+SHADOW_HDRS = \
+	$(SHADOW_DIR)/shadow_cli.h \
+	$(SHADOW_DIR)/shadow_common.h \
+	$(SHADOW_DIR)/shadow_pipeline.h \
+	$(SHADOW_DIR)/shadow_toml.h
+
+SHADOW_OBJS = \
+	$(SHADOW_DIR)/shadow.o \
+	$(SHADOW_DIR)/shadow_cli.o \
+	$(SHADOW_DIR)/shadow_pipeline.o \
+	$(SHADOW_DIR)/shadow_toml.o
+
+.PHONY: quantize translate rotate crop slice xsection fillRegion shadow clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
@@ -136,6 +155,7 @@ crop: $(CROP_BIN)
 slice: $(SLICE_BIN)
 xsection: $(XSECTION_BIN)
 fillRegion: $(FILL_REGION_BIN)
+shadow: $(SHADOW_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -157,6 +177,9 @@ $(XSECTION_BIN): $(XSECTION_OBJS) $(XSECTION_HDRS) | bin
 
 $(FILL_REGION_BIN): $(FILL_REGION_OBJS) $(FILL_REGION_HDRS) | bin
 	$(CXX) $(CXXFLAGS) -o $@ $(FILL_REGION_OBJS) $(LDFLAGS) $(LDLIBS)
+
+$(SHADOW_BIN): $(SHADOW_OBJS) $(SHADOW_HDRS) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $(SHADOW_OBJS) $(LDFLAGS) $(LDLIBS)
 
 $(SLICE_DIR)/slice.o: $(SLICE_DIR)/slice.c $(SLICE_HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -191,10 +214,22 @@ $(FILL_REGION_DIR)/fillRegion_pipeline.o: $(FILL_REGION_DIR)/fillRegion_pipeline
 $(FILL_REGION_DIR)/fillRegion_toml.o: $(FILL_REGION_DIR)/fillRegion_toml.cpp $(FILL_REGION_HDRS)
 	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
 
+$(SHADOW_DIR)/shadow.o: $(SHADOW_DIR)/shadow.c $(SHADOW_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SHADOW_DIR)/shadow_cli.o: $(SHADOW_DIR)/shadow_cli.c $(SHADOW_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SHADOW_DIR)/shadow_pipeline.o: $(SHADOW_DIR)/shadow_pipeline.c $(SHADOW_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SHADOW_DIR)/shadow_toml.o: $(SHADOW_DIR)/shadow_toml.cpp $(SHADOW_HDRS)
+	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
+
 bin:
 	mkdir -p $@
 
 clean:
-	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) $(FILL_REGION_BIN) *.o \
+	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) $(FILL_REGION_BIN) $(SHADOW_BIN) *.o \
 		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
-		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o
+		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o $(SHADOW_DIR)/*.o

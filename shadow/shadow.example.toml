@@ -1,0 +1,9 @@
+from = "top"
+
+[input]
+directory = "input_dir"
+
+[output]
+directory = "output_dir"
+set_color = [0, 128, 32]
+replace_color = [1, 1, 1]

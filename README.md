@@ -16,6 +16,7 @@ The main workflows in this repository are:
 - `slice/`: native C rewrite of the PLY-to-PNG slicer, built as `bin/slice`
 - `bin/xsection`: native cross-section extractor for existing slice stacks
 - `bin/fillRegion`: native region painter for existing slice stacks
+- `bin/shadow`: native directional color replacement for existing slice stacks
 - `translate/translate.c`: stream a colorized LAS into an ASCII PLY
 - `quantize/quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
 - `chamfer.js`: remove material from the edges/corners of an RGBA PNG slice stack using a physical chamfer radius
@@ -256,6 +257,49 @@ Important behaviors:
 - the PNG reader supports the same uncompressed RGBA PNGs written by the native slicer
 - layers outside the XYZ keyframe range are copied without painting
 - `z` is interpreted as the source layer number, while `x` and `y` are measured from the image top-left
+
+### 2c. Shadow an Existing Slice Stack from the Top or Bottom
+
+Build:
+
+```bash
+make shadow
+```
+
+Command:
+
+```bash
+./bin/shadow --config <shadow.toml>
+./bin/shadow --setColor <r,g,b[,a]> --replaceColor <r,g,b[,a]> --from <top|bottom> <input_dir> <output_dir>
+```
+
+Example:
+
+```bash
+./bin/shadow --setColor 0,128,32 --replaceColor 1,1,1 --from top input_dir output_dir
+```
+
+Config example:
+
+```bash
+./bin/shadow --config shadow/shadow.example.toml
+```
+
+What `./bin/shadow` does:
+
+- scans `out_<layer>.png` files from the input directory and writes the processed stack to the output directory
+- keeps a per-pixel stop map across the whole stack
+- starts from `out_0.png` when `--from bottom` is used, or from the highest numbered layer when `--from top` is used
+- for each exposed pixel position, replaces `replaceColor` with `setColor`
+- marks a pixel position as blocked forever once a layer contains any non-matching color there
+
+Important behaviors:
+
+- all source slices must have identical dimensions
+- RGB colors default alpha to `255`; RGBA colors compare and write all four channels
+- `--config` reads `input.directory`, `output.directory`, `set_color`, `replace_color`, and `from`
+- command-line flags and positional paths override values from the config file
+- the PNG reader supports the same uncompressed RGBA PNGs written by the native slicer
 
 ### 3. Translate a Colorized LAS to PLY
 
