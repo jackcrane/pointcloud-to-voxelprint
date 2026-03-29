@@ -16,6 +16,7 @@ CROP_BIN = bin/crop
 ASCII_PLY_DIR = ascii_ply
 SLICE_DIR = slice
 SLICE_BIN = bin/slice
+XSECTION_BIN = bin/xsection
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -93,19 +94,33 @@ SLICE_OBJS = \
 	$(SLICE_DIR)/slice_pipeline.o \
 	$(SLICE_DIR)/slice_toml.o
 
+XSECTION_OBJS = \
+	$(SLICE_DIR)/xsection.o \
+	$(SLICE_DIR)/xsection_cli.o \
+	$(SLICE_DIR)/xsection_pipeline.o \
+	$(SLICE_DIR)/slice_toml.o
+
 SLICE_HDRS = \
 	$(SLICE_DIR)/slice_cli.h \
 	$(SLICE_DIR)/slice_common.h \
 	$(SLICE_DIR)/slice_pipeline.h \
 	$(SLICE_DIR)/slice_toml.h
 
-.PHONY: quantize translate rotate crop slice clean
+XSECTION_HDRS = \
+	$(SLICE_DIR)/xsection_cli.h \
+	$(SLICE_DIR)/xsection_common.h \
+	$(SLICE_DIR)/xsection_pipeline.h \
+	$(SLICE_DIR)/slice_common.h \
+	$(SLICE_DIR)/slice_toml.h
+
+.PHONY: quantize translate rotate crop slice xsection clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
 rotate: $(ROTATE_BIN)
 crop: $(CROP_BIN)
 slice: $(SLICE_BIN)
+xsection: $(XSECTION_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -122,6 +137,9 @@ $(CROP_BIN): $(CROP_SRCS) $(CROP_HDRS) | bin
 $(SLICE_BIN): $(SLICE_OBJS) $(SLICE_HDRS) | bin
 	$(CXX) $(CXXFLAGS) -o $@ $(SLICE_OBJS) $(LDFLAGS) $(LDLIBS)
 
+$(XSECTION_BIN): $(XSECTION_OBJS) $(XSECTION_HDRS) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $(XSECTION_OBJS) $(LDFLAGS) $(LDLIBS)
+
 $(SLICE_DIR)/slice.o: $(SLICE_DIR)/slice.c $(SLICE_HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -134,10 +152,19 @@ $(SLICE_DIR)/slice_pipeline.o: $(SLICE_DIR)/slice_pipeline.c $(SLICE_HDRS)
 $(SLICE_DIR)/slice_toml.o: $(SLICE_DIR)/slice_toml.cpp $(SLICE_HDRS)
 	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
 
+$(SLICE_DIR)/xsection.o: $(SLICE_DIR)/xsection.c $(XSECTION_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SLICE_DIR)/xsection_cli.o: $(SLICE_DIR)/xsection_cli.c $(XSECTION_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SLICE_DIR)/xsection_pipeline.o: $(SLICE_DIR)/xsection_pipeline.c $(XSECTION_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 bin:
 	mkdir -p $@
 
 clean:
-	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) *.o \
+	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) *.o \
 		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
 		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o

@@ -14,6 +14,7 @@ The main workflows in this repository are:
 
 - `index.js`: original JavaScript slicer reference
 - `slice/`: native C rewrite of the PLY-to-PNG slicer, built as `bin/slice`
+- `bin/xsection`: native cross-section extractor for existing slice stacks
 - `translate/translate.c`: stream a colorized LAS into an ASCII PLY
 - `quantize/quantize.js`: quantize an input PLY into a fixed physical voxel grid and write a new PLY
 - `chamfer.js`: remove material from the edges/corners of an RGBA PNG slice stack using a physical chamfer radius
@@ -105,7 +106,7 @@ Current defaults in [`chamfer.js`](./chamfer.js):
 - XY resolution: `300 DPI`
 - layer height: `27,000 nm`
 
-The native slicer also exposes those values as CLI flags, so you do not need to edit source to change them.
+Those values now live in the slice TOML config instead of source edits.
 
 ## Usage Reference
 
@@ -174,6 +175,45 @@ Performance and scaling:
 
 - this path is memory-heavy because it loads the full point cloud and kd-tree in-process
 - it is appropriate for moderate inputs, not for arbitrarily large scans
+
+### 2a. Build a Cross-Section from Existing Slice PNGs
+
+Build:
+
+```bash
+make xsection
+```
+
+Command:
+
+```bash
+./bin/xsection --config <slice.toml> --plane <xz|yz> --dist <index> <output.png>
+```
+
+Example:
+
+```bash
+./bin/xsection --config slice/slice.example.toml --plane xz --dist 200 cross_section.png
+```
+
+What `./bin/xsection` does:
+
+- loads the same slice TOML file used by `./bin/slice`
+- reads `output.directory` from that config and scans `out_<layer>.png` files
+- computes horizontal DPI from `raster.dpi`
+- computes vertical DPI from `raster.layer_height_nm` as `25,400,000 / layer_height_nm`
+- for `xz`, copies one source row from every layer into the output image
+- for `yz`, copies one source column from every layer into the output image
+- treats `--dist` as a source-image row or column index counted from the top-left
+- places `out_0.png` on the bottom row of the destination image so the vertical stack matches slice order
+
+Important behaviors:
+
+- the final positional argument is the output PNG path
+- all source slices must have identical dimensions
+- the output height equals the number of slice PNGs found in the configured output directory
+- the output width is the source width for `xz` and the source height for `yz`
+- the PNG reader currently supports the uncompressed RGBA PNGs written by the native slicer
 
 ### 3. Translate a Colorized LAS to PLY
 

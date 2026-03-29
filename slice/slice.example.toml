@@ -9,15 +9,15 @@
 # Optional cache file for the kd-tree topology.
 # If this file exists, slice will load the kd-tree from it instead of rebuilding.
 # If it does not exist yet, slice will build the tree once and save it here.
-kd_cache = "./ozark_colorized_jc_quantized_rotated-modified.kdcache"
+kd_cache = "/media/sf_Voxel_Ubuntu/ozark_colorized_jc_quantized_rotated-modified.kdcache"
 
 [input]
 # Source point cloud in PLY format.
-path = "./ozark_colorized_jc_quantized_rotated-modified.ply"
+path = "/media/sf_Voxel_Ubuntu/ozark_colorized_jc_quantized_rotated-modified.ply"
 
 [output]
 # Directory where out_<layer>.png files will be written.
-directory = "ozark_slices_1"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1"
 
 [raster]
 # Horizontal XY resolution.
