@@ -28,6 +28,10 @@ typedef struct {
   const char *config_path;
   const char *input_dir;
   const char *output_dir;
+  bool has_layer_first;
+  bool has_layer_last;
+  uint32_t layer_first;
+  uint32_t layer_last;
   FillRegionColor color;
   FillRegionPoint *points;
   size_t point_count;

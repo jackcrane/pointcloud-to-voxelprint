@@ -12,6 +12,11 @@ directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid"
 # Directory where the processed PNG stack will be written.
 directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid-shaped"
 
+# Optional inclusive layer range. Layers outside this range are copied through unchanged.
+[layer]
+# first = 100
+# last = 250
+
 # Fill color as [r, g, b] or [r, g, b, a].
 color = [0, 0, 0]
 

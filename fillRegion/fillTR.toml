@@ -1,16 +1,10 @@
-# Example configuration for filling slice regions.
-#
-# Build and run with:
-#   make fillRegion
-#   ./bin/fillRegion --config fillRegion/fillRegion.example.toml
-
 [input]
 # Directory containing out_<layer>.png files.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-transvoid"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-transvoid"
 
 [output]
 # Directory where the processed PNG stack will be written.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-transvoid-shaped"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-shaped"
 
 # Fill color as [r, g, b] or [r, g, b, a].
 color = [0, 0, 0, 0]
@@ -33,47 +27,3 @@ y = 0
 [[points]]
 x = 750
 y = 0
-
-# XYZ mode:
-# Group points by z layer to define polygon keyframes.
-# Every z group must use the same number of points in the same winding order.
-
-# [[points]]
-# x = 120.0
-# y = 90.0
-# z = 10.0
-
-# [[points]]
-# x = 220.0
-# y = 90.0
-# z = 10.0
-
-# [[points]]
-# x = 220.0
-# y = 210.0
-# z = 10.0
-
-# [[points]]
-# x = 120.0
-# y = 210.0
-# z = 10.0
-
-# [[points]]
-# x = 150.0
-# y = 120.0
-# z = 40.0
-
-# [[points]]
-# x = 250.0
-# y = 110.0
-# z = 40.0
-
-# [[points]]
-# x = 230.0
-# y = 240.0
-# z = 40.0
-
-# [[points]]
-# x = 140.0
-# y = 230.0
-# z = 40.0

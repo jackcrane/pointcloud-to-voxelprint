@@ -65,6 +65,7 @@ static int polygon_for_layer(
     Point2D **points_out,
     size_t *count_out,
     bool *affected_out);
+static bool layer_is_in_fill_range(const FillRegionOptions *options, uint32_t layer_index);
 static void fill_polygon(Image *image, const Point2D *points, size_t count, const FillRegionColor *color);
 static int compare_doubles(const void *lhs, const void *rhs);
 static uint32_t read_u32_be(const uint8_t *bytes);
@@ -133,6 +134,7 @@ int run_fill_region(const FillRegionOptions *options) {
     Point2D *layer_polygon = NULL;
     size_t layer_point_count = 0;
     bool affected = false;
+    bool wrote_copy = false;
 
     if (build_output_path(options->output_dir, layers[i].name, &output_path) != 0) {
       free(xy_polygon);
@@ -141,7 +143,9 @@ int run_fill_region(const FillRegionOptions *options) {
       return -1;
     }
 
-    if (options->mode == FILL_REGION_MODE_XY) {
+    if (!layer_is_in_fill_range(options, layers[i].layer_index)) {
+      affected = false;
+    } else if (options->mode == FILL_REGION_MODE_XY) {
       layer_polygon = xy_polygon;
       layer_point_count = xy_count;
       affected = true;
@@ -169,34 +173,33 @@ int run_fill_region(const FillRegionOptions *options) {
         free_layer_files(layers, layer_count);
         return -1;
       }
+      wrote_copy = true;
       free_layer_polygon(options->mode, layer_polygon, xy_polygon);
-      free(output_path);
-      continue;
-    }
+    } else {
+      Image image;
+      memset(&image, 0, sizeof(image));
+      if (read_png(layers[i].path, &image) != 0) {
+        free_layer_polygon(options->mode, layer_polygon, xy_polygon);
+        free(output_path);
+        free(xy_polygon);
+        free_keyframes(keyframes, keyframe_count);
+        free_layer_files(layers, layer_count);
+        return -1;
+      }
 
-    Image image;
-    memset(&image, 0, sizeof(image));
-    if (read_png(layers[i].path, &image) != 0) {
-      free_layer_polygon(options->mode, layer_polygon, xy_polygon);
-      free(output_path);
-      free(xy_polygon);
-      free_keyframes(keyframes, keyframe_count);
-      free_layer_files(layers, layer_count);
-      return -1;
-    }
+      fill_polygon(&image, layer_polygon, layer_point_count, &options->color);
+      if (write_png(output_path, &image) != 0) {
+        free_image(&image);
+        free_layer_polygon(options->mode, layer_polygon, xy_polygon);
+        free(output_path);
+        free(xy_polygon);
+        free_keyframes(keyframes, keyframe_count);
+        free_layer_files(layers, layer_count);
+        return -1;
+      }
 
-    fill_polygon(&image, layer_polygon, layer_point_count, &options->color);
-    if (write_png(output_path, &image) != 0) {
       free_image(&image);
-      free_layer_polygon(options->mode, layer_polygon, xy_polygon);
-      free(output_path);
-      free(xy_polygon);
-      free_keyframes(keyframes, keyframe_count);
-      free_layer_files(layers, layer_count);
-      return -1;
     }
-
-    free_image(&image);
     free_layer_polygon(options->mode, layer_polygon, xy_polygon);
     free(output_path);
 
@@ -210,10 +213,11 @@ int run_fill_region(const FillRegionOptions *options) {
       format_duration(elapsed, elapsed_text, sizeof(elapsed_text));
       format_duration(remaining, remaining_text, sizeof(remaining_text));
       printf(
-          "Layer %zu/%zu (%s)  elapsed=%s  eta=%s\n",
+          "Layer %zu/%zu (%s, %s)  elapsed=%s  eta=%s\n",
           completed,
           layer_count,
           layers[i].name,
+          wrote_copy ? "copied" : "filled",
           elapsed_text,
           remaining_text);
       fflush(stdout);
@@ -574,6 +578,19 @@ static void free_layer_polygon(
     return;
   }
   free(layer_polygon);
+}
+
+static bool layer_is_in_fill_range(const FillRegionOptions *options, uint32_t layer_index) {
+  if (options == NULL) {
+    return false;
+  }
+  if (options->has_layer_first && layer_index < options->layer_first) {
+    return false;
+  }
+  if (options->has_layer_last && layer_index > options->layer_last) {
+    return false;
+  }
+  return true;
 }
 
 static int polygon_for_layer(

@@ -49,7 +49,7 @@ x_positive = 0.01
 x_negative = 0.01
 y_positive = 0.01
 y_negative = 0.01
-z_positive = 0.1
+z_positive = 0.07
 z_negative = 0.01
 
 [logging]

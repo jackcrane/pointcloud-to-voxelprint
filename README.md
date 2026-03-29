@@ -239,7 +239,7 @@ Example:
 
 What `./bin/fillRegion` does:
 
-- reads `input.directory`, `output.directory`, `color`, and `[[points]]` from its TOML config
+- reads `input.directory`, `output.directory`, optional `layer.first` / `layer.last`, `color`, and `[[points]]` from its TOML config
 - scans `out_<layer>.png` files from the input directory and writes the processed stack to the output directory
 - preserves layer filenames and image dimensions
 - copies untouched layers through unchanged
@@ -255,6 +255,8 @@ Point modes:
 Important behaviors:
 
 - the PNG reader supports the same uncompressed RGBA PNGs written by the native slicer
+- `layer.first` and `layer.last` are optional inclusive limits for where painting is allowed
+- layers outside the configured layer range are copied without painting
 - layers outside the XYZ keyframe range are copied without painting
 - `z` is interpreted as the source layer number, while `x` and `y` are measured from the image top-left
 

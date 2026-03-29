@@ -58,6 +58,31 @@ bool parse_double_field(const std::shared_ptr<cpptoml::table> &table,
   return false;
 }
 
+bool parse_u32_field(const std::shared_ptr<cpptoml::table> &table,
+                     const char *key,
+                     uint32_t *out) {
+  if (auto value = table->get_as<int64_t>(key)) {
+    if (*value < 0 || *value > static_cast<int64_t>(UINT32_MAX)) {
+      return false;
+    }
+    *out = static_cast<uint32_t>(*value);
+    return true;
+  }
+
+  if (auto value = table->get_as<double>(key)) {
+    const double parsed = *value;
+    const double rounded = std::round(parsed);
+    if (parsed < 0.0 || parsed > static_cast<double>(UINT32_MAX) ||
+        std::fabs(parsed - rounded) > 1e-9) {
+      return false;
+    }
+    *out = static_cast<uint32_t>(rounded);
+    return true;
+  }
+
+  return false;
+}
+
 }  // namespace
 
 extern "C" void free_fill_region_options(FillRegionOptions *options) {
@@ -83,6 +108,7 @@ extern "C" int load_fill_region_config_file(const char *path, FillRegionOptions 
     const auto config = cpptoml::parse_file(path);
     const auto input = config->get_table("input");
     const auto output = config->get_table("output");
+    const auto layer = config->get_table("layer");
     const auto color = output != nullptr ? output->get_array("color") : config->get_array("color");
     const auto point_tables = config->get_table_array("points");
 
@@ -121,6 +147,34 @@ extern "C" int load_fill_region_config_file(const char *path, FillRegionOptions 
     parsed.color.g = components[1];
     parsed.color.b = components[2];
     parsed.color.a = components[3];
+
+    if (layer != nullptr) {
+      uint32_t first = 0;
+      uint32_t last = 0;
+      const bool has_first = layer->contains("first");
+      const bool has_last = layer->contains("last");
+
+      if (has_first && !parse_u32_field(layer, "first", &first)) {
+        std::fprintf(stderr, "layer.first must be a whole number between 0 and %u.\n", UINT32_MAX);
+        free_fill_region_options(&parsed);
+        return -1;
+      }
+      if (has_last && !parse_u32_field(layer, "last", &last)) {
+        std::fprintf(stderr, "layer.last must be a whole number between 0 and %u.\n", UINT32_MAX);
+        free_fill_region_options(&parsed);
+        return -1;
+      }
+      if (has_first && has_last && first > last) {
+        std::fprintf(stderr, "layer.first must be less than or equal to layer.last.\n");
+        free_fill_region_options(&parsed);
+        return -1;
+      }
+
+      parsed.has_layer_first = has_first;
+      parsed.has_layer_last = has_last;
+      parsed.layer_first = first;
+      parsed.layer_last = last;
+    }
 
     if (point_tables == nullptr || point_tables->get().empty()) {
       std::fprintf(stderr, "At least three [[points]] entries are required.\n");
