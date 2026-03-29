@@ -83,7 +83,7 @@ extern "C" int load_fill_region_config_file(const char *path, FillRegionOptions 
     const auto config = cpptoml::parse_file(path);
     const auto input = config->get_table("input");
     const auto output = config->get_table("output");
-    const auto color = config->get_array("color");
+    const auto color = output != nullptr ? output->get_array("color") : config->get_array("color");
     const auto point_tables = config->get_table_array("points");
 
     if (input != nullptr) {

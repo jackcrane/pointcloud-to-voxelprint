@@ -19,7 +19,7 @@ color = [0, 0, 0]
 # Omit z to fill the same polygon on every layer.
 #
 [[points]]
-x = 749
+x = 750
 y = 421
 
 [[points]]
@@ -28,7 +28,7 @@ y = 19
 
 [[points]]
 x = 109
-y = 1
+y = 0
 
 [[points]]
 x = 750

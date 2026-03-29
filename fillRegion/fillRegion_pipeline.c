@@ -52,6 +52,10 @@ static int build_xyz_keyframes(
     PolygonKeyframe **keyframes_out,
     size_t *count_out);
 static void free_keyframes(PolygonKeyframe *keyframes, size_t count);
+static void free_layer_polygon(
+    FillRegionMode mode,
+    Point2D *layer_polygon,
+    Point2D *shared_xy_polygon);
 static int polygon_for_layer(
     const FillRegionOptions *options,
     const PolygonKeyframe *keyframes,
@@ -154,14 +158,14 @@ int run_fill_region(const FillRegionOptions *options) {
 
     if (!affected) {
       if (copy_file(layers[i].path, output_path) != 0) {
-        free(layer_polygon);
+        free_layer_polygon(options->mode, layer_polygon, xy_polygon);
         free(output_path);
         free(xy_polygon);
         free_keyframes(keyframes, keyframe_count);
         free_layer_files(layers, layer_count);
         return -1;
       }
-      free(layer_polygon);
+      free_layer_polygon(options->mode, layer_polygon, xy_polygon);
       free(output_path);
       continue;
     }
@@ -169,7 +173,7 @@ int run_fill_region(const FillRegionOptions *options) {
     Image image;
     memset(&image, 0, sizeof(image));
     if (read_png(layers[i].path, &image) != 0) {
-      free(layer_polygon);
+      free_layer_polygon(options->mode, layer_polygon, xy_polygon);
       free(output_path);
       free(xy_polygon);
       free_keyframes(keyframes, keyframe_count);
@@ -180,7 +184,7 @@ int run_fill_region(const FillRegionOptions *options) {
     fill_polygon(&image, layer_polygon, layer_point_count, &options->color);
     if (write_png(output_path, &image) != 0) {
       free_image(&image);
-      free(layer_polygon);
+      free_layer_polygon(options->mode, layer_polygon, xy_polygon);
       free(output_path);
       free(xy_polygon);
       free_keyframes(keyframes, keyframe_count);
@@ -189,7 +193,7 @@ int run_fill_region(const FillRegionOptions *options) {
     }
 
     free_image(&image);
-    free(layer_polygon);
+    free_layer_polygon(options->mode, layer_polygon, xy_polygon);
     free(output_path);
   }
 
@@ -534,6 +538,19 @@ static void free_keyframes(PolygonKeyframe *keyframes, size_t count) {
     free(keyframes[i].points);
   }
   free(keyframes);
+}
+
+static void free_layer_polygon(
+    FillRegionMode mode,
+    Point2D *layer_polygon,
+    Point2D *shared_xy_polygon) {
+  if (layer_polygon == NULL) {
+    return;
+  }
+  if (mode == FILL_REGION_MODE_XY && layer_polygon == shared_xy_polygon) {
+    return;
+  }
+  free(layer_polygon);
 }
 
 static int polygon_for_layer(
