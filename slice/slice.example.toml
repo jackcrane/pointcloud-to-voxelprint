@@ -17,7 +17,7 @@ path = "/media/sf_Voxel_Ubuntu/ozark_colorized_jc_quantized_rotated-modified.ply
 
 [output]
 # Directory where out_<layer>.png files will be written.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_3"
 
 [raster]
 # Horizontal XY resolution.
