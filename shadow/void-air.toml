@@ -4,6 +4,6 @@ from = "top"
 directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom"
 
 [output]
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid"
-set_color = [0, 0, 0]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-transvoid"
+set_color = [0, 0, 0, 0]
 replace_color = [247, 247, 247, 128]

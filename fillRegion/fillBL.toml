@@ -6,14 +6,14 @@
 
 [input]
 # Directory containing out_<layer>.png files.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid-shaped"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-transvoid-shaped"
 
 [output]
 # Directory where the processed PNG stack will be written.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-blackvoid-shaped2"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0-whitebottom-transvoid-shaped2"
 
 # Fill color as [r, g, b] or [r, g, b, a].
-color = [0, 0, 0]
+color = [0, 0, 0, 0]
 
 # XY mode:
 # Omit z to fill the same polygon on every layer.
