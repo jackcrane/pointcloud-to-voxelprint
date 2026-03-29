@@ -21,6 +21,8 @@ FILL_REGION_DIR = fillRegion
 FILL_REGION_BIN = bin/fillRegion
 SHADOW_DIR = shadow
 SHADOW_BIN = bin/shadow
+HOLLOW_DIR = hollow
+HOLLOW_BIN = bin/hollow
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -146,7 +148,19 @@ SHADOW_OBJS = \
 	$(SHADOW_DIR)/shadow_pipeline.o \
 	$(SHADOW_DIR)/shadow_toml.o
 
-.PHONY: quantize translate rotate crop slice xsection fillRegion shadow clean
+HOLLOW_HDRS = \
+	$(HOLLOW_DIR)/hollow_cli.h \
+	$(HOLLOW_DIR)/hollow_common.h \
+	$(HOLLOW_DIR)/hollow_pipeline.h \
+	$(HOLLOW_DIR)/hollow_toml.h
+
+HOLLOW_OBJS = \
+	$(HOLLOW_DIR)/hollow.o \
+	$(HOLLOW_DIR)/hollow_cli.o \
+	$(HOLLOW_DIR)/hollow_pipeline.o \
+	$(HOLLOW_DIR)/hollow_toml.o
+
+.PHONY: quantize translate rotate crop slice xsection fillRegion shadow hollow clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
@@ -156,6 +170,7 @@ slice: $(SLICE_BIN)
 xsection: $(XSECTION_BIN)
 fillRegion: $(FILL_REGION_BIN)
 shadow: $(SHADOW_BIN)
+hollow: $(HOLLOW_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -180,6 +195,9 @@ $(FILL_REGION_BIN): $(FILL_REGION_OBJS) $(FILL_REGION_HDRS) | bin
 
 $(SHADOW_BIN): $(SHADOW_OBJS) $(SHADOW_HDRS) | bin
 	$(CXX) $(CXXFLAGS) -o $@ $(SHADOW_OBJS) $(LDFLAGS) $(LDLIBS)
+
+$(HOLLOW_BIN): $(HOLLOW_OBJS) $(HOLLOW_HDRS) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $(HOLLOW_OBJS) $(LDFLAGS) $(LDLIBS)
 
 $(SLICE_DIR)/slice.o: $(SLICE_DIR)/slice.c $(SLICE_HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -226,10 +244,22 @@ $(SHADOW_DIR)/shadow_pipeline.o: $(SHADOW_DIR)/shadow_pipeline.c $(SHADOW_HDRS)
 $(SHADOW_DIR)/shadow_toml.o: $(SHADOW_DIR)/shadow_toml.cpp $(SHADOW_HDRS)
 	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
 
+$(HOLLOW_DIR)/hollow.o: $(HOLLOW_DIR)/hollow.c $(HOLLOW_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(HOLLOW_DIR)/hollow_cli.o: $(HOLLOW_DIR)/hollow_cli.c $(HOLLOW_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(HOLLOW_DIR)/hollow_pipeline.o: $(HOLLOW_DIR)/hollow_pipeline.c $(HOLLOW_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(HOLLOW_DIR)/hollow_toml.o: $(HOLLOW_DIR)/hollow_toml.cpp $(HOLLOW_HDRS)
+	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
+
 bin:
 	mkdir -p $@
 
 clean:
 	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) $(FILL_REGION_BIN) $(SHADOW_BIN) *.o \
 		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
-		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o $(SHADOW_DIR)/*.o
+		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o $(SHADOW_DIR)/*.o $(HOLLOW_DIR)/*.o $(HOLLOW_BIN)

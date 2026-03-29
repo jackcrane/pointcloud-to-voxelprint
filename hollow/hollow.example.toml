@@ -1,0 +1,28 @@
+# Example configuration for hollowing a PNG voxel stack.
+#
+# Build and run with:
+#   make hollow
+#   ./bin/hollow --config hollow/hollow.example.toml
+
+[input]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-fixedlake"
+
+[output]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-hollow"
+
+dist_positive_x = 0
+dist_negative_x = 0
+dist_positive_y = 30
+dist_negative_y = 0
+dist_positive_z = 0
+dist_negative_z = 0
+
+colors_for_removal = [
+  [255, 255, 255],
+  [247, 247, 247, 128],
+]
+
+destination_color = [0, 0, 0, 0]
+
+[logging]
+interval = 1000000

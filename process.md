@@ -192,6 +192,38 @@ y = 431
 ./bin/fillRegion --config fillRegion/fillBL.toml
 ```
 
+# hollow interior voxels by directional thresholds
+
+```toml
+[input]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-fixedlake"
+
+[output]
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-hollow"
+
+dist_positive_x = 30
+dist_negative_x = 30
+dist_positive_y = 30
+dist_negative_y = 30
+dist_positive_z = 30
+dist_negative_z = 10
+
+colors_for_removal = [
+  [255, 255, 255],
+  [247, 247, 247, 128],
+]
+
+destination_color = [0, 0, 0, 0]
+
+[logging]
+interval = 1000000
+```
+
+```sh
+make hollow
+./bin/hollow --config hollow/hollow.example.toml
+```
+
 # Pad the bottom to thicken lake surface
 
 ```
