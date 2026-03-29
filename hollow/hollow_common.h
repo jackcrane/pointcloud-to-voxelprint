@@ -1,6 +1,7 @@
 #ifndef HOLLOW_COMMON_H
 #define HOLLOW_COMMON_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -26,6 +27,7 @@ typedef struct {
   HollowColor *colors_for_removal;
   size_t colors_for_removal_count;
   HollowColor destination_color;
+  bool treat_edges_as_blockers;
   uint64_t log_interval;
 } HollowOptions;
 

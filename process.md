@@ -214,6 +214,7 @@ colors_for_removal = [
 ]
 
 destination_color = [0, 0, 0, 0]
+treat_edges_as_blockers = true
 
 [logging]
 interval = 1000000

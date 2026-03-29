@@ -118,6 +118,7 @@ extern "C" int load_hollow_config_file(const char *path, HollowOptions *options)
 
   HollowOptions parsed = {};
   parsed.destination_color.a = 255u;
+  parsed.treat_edges_as_blockers = true;
   parsed.log_interval = HOLLOW_DEFAULT_LOG_INTERVAL;
 
   try {
@@ -194,6 +195,10 @@ extern "C" int load_hollow_config_file(const char *path, HollowOptions *options)
       return -1;
     }
     std::memcpy(parsed.colors_for_removal, colors.data(), colors.size() * sizeof(HollowColor));
+
+    if (auto value = config->get_as<bool>("treat_edges_as_blockers")) {
+      parsed.treat_edges_as_blockers = *value;
+    }
 
     if (logging != nullptr) {
       if (auto value = logging->get_as<int64_t>("interval")) {

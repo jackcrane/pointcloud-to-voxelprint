@@ -62,6 +62,7 @@ static void run_positive_x_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_negative_x_pass(
     const uint8_t *removable_map,
@@ -70,6 +71,7 @@ static void run_negative_x_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_positive_y_pass(
     const uint8_t *removable_map,
@@ -78,6 +80,7 @@ static void run_positive_y_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_negative_y_pass(
     const uint8_t *removable_map,
@@ -86,6 +89,7 @@ static void run_negative_y_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_positive_z_pass(
     const uint8_t *removable_map,
@@ -94,6 +98,7 @@ static void run_positive_z_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_negative_z_pass(
     const uint8_t *removable_map,
@@ -102,6 +107,7 @@ static void run_negative_z_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static uint32_t read_u32_be(const uint8_t *bytes);
 static void write_u32_be(uint8_t *out, uint32_t value);
@@ -262,6 +268,7 @@ int run_hollow(const HollowOptions *options) {
                         width,
                         height,
                         options->dist_positive_x,
+                        options->treat_edges_as_blockers,
                         &progress);
   }
   if (options->dist_negative_x > 0u) {
@@ -271,6 +278,7 @@ int run_hollow(const HollowOptions *options) {
                         width,
                         height,
                         options->dist_negative_x,
+                        options->treat_edges_as_blockers,
                         &progress);
   }
   if (options->dist_positive_y > 0u) {
@@ -280,6 +288,7 @@ int run_hollow(const HollowOptions *options) {
                         width,
                         height,
                         options->dist_positive_y,
+                        options->treat_edges_as_blockers,
                         &progress);
   }
   if (options->dist_negative_y > 0u) {
@@ -289,6 +298,7 @@ int run_hollow(const HollowOptions *options) {
                         width,
                         height,
                         options->dist_negative_y,
+                        options->treat_edges_as_blockers,
                         &progress);
   }
   if (options->dist_positive_z > 0u) {
@@ -298,6 +308,7 @@ int run_hollow(const HollowOptions *options) {
                         width,
                         height,
                         options->dist_positive_z,
+                        options->treat_edges_as_blockers,
                         &progress);
   }
   if (options->dist_negative_z > 0u) {
@@ -307,6 +318,7 @@ int run_hollow(const HollowOptions *options) {
                         width,
                         height,
                         options->dist_negative_z,
+                        options->treat_edges_as_blockers,
                         &progress);
   }
 
@@ -656,10 +668,11 @@ static void run_positive_x_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress) {
   for (size_t layer = 0; layer < layer_count; ++layer) {
     for (uint32_t y = 0; y < height; ++y) {
-      uint32_t next_blocker = UINT32_MAX;
+      uint32_t next_blocker = treat_edges_as_blockers ? width : UINT32_MAX;
       for (uint32_t x = width; x-- > 0u;) {
         const size_t index = voxel_index(layer, y, x, width, height);
         if (removable_map[index] == 0u) {
@@ -682,17 +695,19 @@ static void run_negative_x_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress) {
   for (size_t layer = 0; layer < layer_count; ++layer) {
     for (uint32_t y = 0; y < height; ++y) {
-      uint32_t previous_blocker = UINT32_MAX;
+      int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
       for (uint32_t x = 0; x < width; ++x) {
         const size_t index = voxel_index(layer, y, x, width, height);
         if (removable_map[index] == 0u) {
-          previous_blocker = x;
+          previous_blocker = (int64_t) x;
           continue;
         }
-        if (previous_blocker != UINT32_MAX && x - previous_blocker <= threshold) {
+        if (previous_blocker != INT64_MIN &&
+            (uint64_t) ((int64_t) x - previous_blocker) <= threshold) {
           keep_map[index] = 1u;
         }
       }
@@ -708,10 +723,11 @@ static void run_positive_y_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress) {
   for (size_t layer = 0; layer < layer_count; ++layer) {
     for (uint32_t x = 0; x < width; ++x) {
-      uint32_t next_blocker = UINT32_MAX;
+      uint32_t next_blocker = treat_edges_as_blockers ? height : UINT32_MAX;
       for (uint32_t y = height; y-- > 0u;) {
         const size_t index = voxel_index(layer, y, x, width, height);
         if (removable_map[index] == 0u) {
@@ -734,17 +750,19 @@ static void run_negative_y_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress) {
   for (size_t layer = 0; layer < layer_count; ++layer) {
     for (uint32_t x = 0; x < width; ++x) {
-      uint32_t previous_blocker = UINT32_MAX;
+      int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
       for (uint32_t y = 0; y < height; ++y) {
         const size_t index = voxel_index(layer, y, x, width, height);
         if (removable_map[index] == 0u) {
-          previous_blocker = y;
+          previous_blocker = (int64_t) y;
           continue;
         }
-        if (previous_blocker != UINT32_MAX && y - previous_blocker <= threshold) {
+        if (previous_blocker != INT64_MIN &&
+            (uint64_t) ((int64_t) y - previous_blocker) <= threshold) {
           keep_map[index] = 1u;
         }
       }
@@ -760,10 +778,11 @@ static void run_positive_z_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress) {
   for (uint32_t y = 0; y < height; ++y) {
     for (uint32_t x = 0; x < width; ++x) {
-      size_t next_blocker = SIZE_MAX;
+      size_t next_blocker = treat_edges_as_blockers ? layer_count : SIZE_MAX;
       for (size_t layer = layer_count; layer-- > 0u;) {
         const size_t index = voxel_index(layer, y, x, width, height);
         if (removable_map[index] == 0u) {
@@ -786,17 +805,19 @@ static void run_negative_z_pass(
     uint32_t width,
     uint32_t height,
     uint32_t threshold,
+    bool treat_edges_as_blockers,
     ProgressTracker *progress) {
   for (uint32_t y = 0; y < height; ++y) {
     for (uint32_t x = 0; x < width; ++x) {
-      size_t previous_blocker = SIZE_MAX;
+      int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
       for (size_t layer = 0; layer < layer_count; ++layer) {
         const size_t index = voxel_index(layer, y, x, width, height);
         if (removable_map[index] == 0u) {
-          previous_blocker = layer;
+          previous_blocker = (int64_t) layer;
           continue;
         }
-        if (previous_blocker != SIZE_MAX && layer - previous_blocker <= threshold) {
+        if (previous_blocker != INT64_MIN &&
+            (uint64_t) ((int64_t) layer - previous_blocker) <= threshold) {
           keep_map[index] = 1u;
         }
       }

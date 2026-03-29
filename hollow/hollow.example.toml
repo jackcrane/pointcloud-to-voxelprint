@@ -10,11 +10,11 @@ directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-fixedlake"
 [output]
 directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-hollow"
 
-dist_positive_x = 0
-dist_negative_x = 0
+dist_positive_x = 30
+dist_negative_x = 30
 dist_positive_y = 30
-dist_negative_y = 0
-dist_positive_z = 0
+dist_negative_y = 30
+dist_positive_z = 30
 dist_negative_z = 0
 
 colors_for_removal = [
@@ -23,6 +23,7 @@ colors_for_removal = [
 ]
 
 destination_color = [0, 0, 0, 0]
+treat_edges_as_blockers = true
 
 [logging]
 interval = 1000000
