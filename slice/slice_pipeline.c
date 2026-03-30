@@ -406,7 +406,7 @@ int run_slice(const SliceOptions *options) {
       const double x = min_x + (((double) column + 0.5) / (double) width) * x_size;
 
       for (uint32_t row = 0; row < height; ++row) {
-        const double y = min_y + (((double) row + 0.5) / (double) height) * y_size;
+        const double y = max_y - (((double) row + 0.5) / (double) height) * y_size;
         const SlicePoint *point = nearest_point(
             root,
             (Vec3) {x, y, z_world},
