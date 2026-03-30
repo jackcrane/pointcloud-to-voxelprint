@@ -27,7 +27,7 @@ path = "/media/sf_Voxel_Ubuntu/ozark_colorized_jc_quantized_rotated-modified.ply
 
 [output]
 # Directory where out_<layer>.png files will be written.
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_0"
+directory = "/media/sf_Voxel_Ubuntu/ozark_slices_2/slice"
 
 [raster]
 # Horizontal XY resolution.
@@ -42,12 +42,12 @@ multiplier = 1.0
 
 # Physical size of the print in inches.
 # Use "auto" for any dimension you want inferred from the model bounds.
-x_in = 2.5
+x_in = 10
 y_in = "auto"
 z_in = "auto"
 
 # Used when any dimension above is set to "auto".
-longest_side_in = 2.5
+longest_side_in = 10
 
 # Extra XY padding around the model bounds as a fraction of the model size.
 padding_ratio = 0.0
@@ -59,7 +59,7 @@ x_positive = 0.01
 x_negative = 0.01
 y_positive = 0.01
 y_negative = 0.01
-z_positive = 0.1
+z_positive = 0.07
 z_negative = 0.01
 
 [logging]
