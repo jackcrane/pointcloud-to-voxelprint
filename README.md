@@ -383,7 +383,9 @@ Important behaviors:
 - input and output paths must differ
 - the output directory is created if missing
 - temporary working files are retained after the run; the binary prints the temp directory path before exit
-- `--temp-dir DIR` tells the binary exactly where to store or reuse shard files and staged output
+- `--temp-dir DIR` without `--steps` means "put this run's temp files here"
+- `--temp-dir DIR` with `--steps shard,reduce` means "rebuild temp files here, then continue"
+- `--temp-dir DIR` with `--steps reduce` means "reuse existing temp files from here"
 - if `--temp-dir` is omitted, the binary creates a fresh retained temp directory under the current working directory
 - retained shard files are plain text records with `cell_id x y z r g b a packed_color`
 - if the input contains no usable numeric vertices, the script writes an empty PLY

@@ -86,6 +86,10 @@ static bool should_start_from(const QuantizeRun *run, QuantizeStartStage stage) 
   return run->options.start_stage == stage;
 }
 
+static bool should_resume_existing_temp_files(const QuantizeRun *run) {
+  return run->options.steps_specified && run->options.start_stage == QUANTIZE_START_REDUCE;
+}
+
 static void init_bounds(Bounds *bounds) {
   bounds->min_x = INFINITY;
   bounds->min_y = INFINITY;
@@ -1336,12 +1340,15 @@ int run_quantize(const QuantizeOptions *options) {
     if (prepare_resume_from_shard(&run) != 0) {
       goto cleanup;
     }
-  } else {
+  } else if (should_resume_existing_temp_files(&run)) {
     run.scaler = build_grid_scaler(build_default_grid());
     if (init_existing_temp_paths(&run.temp_paths, run.options.temp_dir_path) != 0) {
       goto cleanup;
     }
     run.sharded_point_count = 0;
+  } else {
+    fprintf(stderr, "Unsupported quantize start stage.\n");
+    goto cleanup;
   }
 
   if (run.options.start_stage <= QUANTIZE_START_SHARD) {

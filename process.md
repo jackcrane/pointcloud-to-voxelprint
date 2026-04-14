@@ -5,6 +5,12 @@ sudo apt-get install ffmpeg imagemagick
 sudo ln -s /usr/bin/convert /usr/bin/magick
 ```
 
+# Prepare
+
+```sh
+./bin/rotate /media/sf_Voxel_Ubuntu/unskew/ozark_colorized_jc.ply /media/sf_Voxel_Ubuntu/unskew/ozark_colorized_jc_rotated.ply --angle -22 --centroid 0,0,0 --about z
+```
+
 # slice
 
 ```toml

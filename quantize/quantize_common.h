@@ -108,6 +108,7 @@ typedef struct {
   const char *temp_dir_path;
   uint64_t log_interval;
   QuantizeStartStage start_stage;
+  bool steps_specified;
 } QuantizeOptions;
 
 typedef int (*VertexVisitor)(const Vertex *vertex, void *ctx);

@@ -14,29 +14,64 @@ typedef struct {
   double z;
 } Point3D;
 
-static Point3D rotate_point(const RotateOptions *options, double radians, Point3D point) {
+typedef struct {
+  double m[3][3];
+} RotationMatrix;
+
+static RotationMatrix build_rotation_matrix(const RotateOptions *options, double radians) {
   double sin_theta = sin(radians);
   double cos_theta = cos(radians);
+  RotationMatrix matrix = {{
+      {1.0, 0.0, 0.0},
+      {0.0, 1.0, 0.0},
+      {0.0, 0.0, 1.0},
+  }};
 
-  double dx = point.x - options->centroid_x;
-  double dy = point.y - options->centroid_y;
-  double dz = point.z - options->centroid_z;
-
-  Point3D rotated = point;
   switch (options->axis) {
     case ROTATE_AXIS_X:
-      rotated.y = options->centroid_y + (dy * cos_theta) - (dz * sin_theta);
-      rotated.z = options->centroid_z + (dy * sin_theta) + (dz * cos_theta);
+      matrix.m[1][1] = cos_theta;
+      matrix.m[1][2] = -sin_theta;
+      matrix.m[2][1] = sin_theta;
+      matrix.m[2][2] = cos_theta;
       break;
     case ROTATE_AXIS_Y:
-      rotated.x = options->centroid_x + (dx * cos_theta) + (dz * sin_theta);
-      rotated.z = options->centroid_z - (dx * sin_theta) + (dz * cos_theta);
+      matrix.m[0][0] = cos_theta;
+      matrix.m[0][2] = sin_theta;
+      matrix.m[2][0] = -sin_theta;
+      matrix.m[2][2] = cos_theta;
       break;
     case ROTATE_AXIS_Z:
-      rotated.x = options->centroid_x + (dx * cos_theta) - (dy * sin_theta);
-      rotated.y = options->centroid_y + (dx * sin_theta) + (dy * cos_theta);
+      matrix.m[0][0] = cos_theta;
+      matrix.m[0][1] = -sin_theta;
+      matrix.m[1][0] = sin_theta;
+      matrix.m[1][1] = cos_theta;
       break;
   }
+
+  return matrix;
+}
+
+static Point3D rotate_point(
+    const RotateOptions *options,
+    const RotationMatrix *matrix,
+    Point3D point) {
+  double translated_x = point.x - options->centroid_x;
+  double translated_y = point.y - options->centroid_y;
+  double translated_z = point.z - options->centroid_z;
+
+  Point3D rotated;
+  rotated.x = options->centroid_x +
+      (matrix->m[0][0] * translated_x) +
+      (matrix->m[0][1] * translated_y) +
+      (matrix->m[0][2] * translated_z);
+  rotated.y = options->centroid_y +
+      (matrix->m[1][0] * translated_x) +
+      (matrix->m[1][1] * translated_y) +
+      (matrix->m[1][2] * translated_z);
+  rotated.z = options->centroid_z +
+      (matrix->m[2][0] * translated_x) +
+      (matrix->m[2][1] * translated_y) +
+      (matrix->m[2][2] * translated_z);
 
   return rotated;
 }
@@ -72,6 +107,7 @@ int run_rotate(const RotateOptions *options) {
 
   double started_at = ascii_ply_now_seconds();
   double radians = options->angle_degrees * (acos(-1.0) / 180.0);
+  RotationMatrix rotation = build_rotation_matrix(options, radians);
 
   if (ascii_ply_read_header(options->input_path, &header) != 0) {
     goto cleanup;
@@ -115,7 +151,7 @@ int run_rotate(const RotateOptions *options) {
       goto cleanup;
     }
 
-    Point3D rotated = rotate_point(options, radians, point);
+    Point3D rotated = rotate_point(options, &rotation, point);
 
     char x_text[64];
     char y_text[64];

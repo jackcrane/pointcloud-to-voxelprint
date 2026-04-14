@@ -71,6 +71,7 @@ int parse_quantize_options(int argc, char **argv, QuantizeOptions *options_out) 
   memset(&options, 0, sizeof(options));
   options.log_interval = DEFAULT_LOG_INTERVAL;
   options.start_stage = QUANTIZE_START_BOUNDS;
+  options.steps_specified = false;
 
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
@@ -123,6 +124,7 @@ int parse_quantize_options(int argc, char **argv, QuantizeOptions *options_out) 
         print_usage(argv[0]);
         return -1;
       }
+      options.steps_specified = true;
       i++;
       continue;
     }
@@ -135,6 +137,7 @@ int parse_quantize_options(int argc, char **argv, QuantizeOptions *options_out) 
         print_usage(argv[0]);
         return -1;
       }
+      options.steps_specified = true;
       continue;
     }
 
