@@ -13,9 +13,7 @@ import {
 
 const { SingleBar, Presets } = cliProgress;
 
-const SIZE_X_IN = 10;
-const SIZE_Y_IN = 10;
-const SIZE_Z_IN = 4;
+const LONGEST_EDGE_IN = 10;
 
 const DPI_X = 300;
 const DPI_Y = 300;
@@ -106,13 +104,7 @@ const run = async () => {
     return;
   }
 
-  const grid = {
-    x: Math.max(1, Math.round(SIZE_X_IN * DPI_X)),
-    y: Math.max(1, Math.round(SIZE_Y_IN * DPI_Y)),
-    z: Math.max(1, Math.round(SIZE_Z_IN * DPI_Z)),
-  };
-
-  const scaler = buildScaler(bounds, grid);
+  const scaler = buildScaler(bounds);
   const tempDir = await fsPromises.mkdtemp(
     path.join(os.tmpdir(), "pointcloud-quantize-"),
   );
@@ -231,7 +223,7 @@ const run = async () => {
     console.log(
       [
         `Quantized ${actualInputPointCount} input points into ${outputPointCount} output points.`,
-        `Target size: ${SIZE_X_IN}" x ${SIZE_Y_IN}" x ${SIZE_Z_IN}"`,
+        `Target size: ${scaler.sizeX}" x ${scaler.sizeY}" x ${scaler.sizeZ}" (longest edge ${LONGEST_EDGE_IN}")`,
         `Target DPI: ${DPI_X} x ${DPI_Y} x ${DPI_Z}`,
         ...buildTimingSummaryLines(
           startedAtNs,
@@ -485,10 +477,27 @@ const buildBinaryLayout = (properties) => {
   return layout;
 };
 
-const buildScaler = (bounds, grid) => {
+const scaleDimensionToLongestEdge = (range, longestRange) => {
+  if (longestRange <= 0) return LONGEST_EDGE_IN;
+  if (range <= 0) return 0;
+  return (LONGEST_EDGE_IN * range) / longestRange;
+};
+
+const dimensionToSteps = (sizeIn, dpi) => Math.max(1, Math.round(sizeIn * dpi));
+
+const buildScaler = (bounds) => {
   const rangeX = bounds.maxX - bounds.minX;
   const rangeY = bounds.maxY - bounds.minY;
   const rangeZ = bounds.maxZ - bounds.minZ;
+  const longestRange = Math.max(rangeX, rangeY, rangeZ);
+  const sizeX = scaleDimensionToLongestEdge(rangeX, longestRange);
+  const sizeY = scaleDimensionToLongestEdge(rangeY, longestRange);
+  const sizeZ = scaleDimensionToLongestEdge(rangeZ, longestRange);
+  const grid = {
+    x: dimensionToSteps(sizeX, DPI_X),
+    y: dimensionToSteps(sizeY, DPI_Y),
+    z: dimensionToSteps(sizeZ, DPI_Z),
+  };
 
   const quantize = (value, min, range, steps) => {
     const ratio = range > 0 ? (value - min) / range : 0.5;
@@ -504,6 +513,9 @@ const buildScaler = (bounds, grid) => {
     gridZ: grid.z,
     gridXBig: BigInt(grid.x),
     gridYBig: BigInt(grid.y),
+    sizeX,
+    sizeY,
+    sizeZ,
     quantizeX: (value) => quantize(value, bounds.minX, rangeX, grid.x),
     quantizeY: (value) => quantize(value, bounds.minY, rangeY, grid.y),
     quantizeZ: (value) => quantize(value, bounds.minZ, rangeZ, grid.z),
@@ -517,9 +529,9 @@ const decodeCellCenter = (cellId, scaler) => {
   const zIndex = Number(yz / scaler.gridYBig);
 
   return {
-    x: ((xIndex + 0.5) / scaler.gridX) * SIZE_X_IN,
-    y: ((yIndex + 0.5) / scaler.gridY) * SIZE_Y_IN,
-    z: ((zIndex + 0.5) / scaler.gridZ) * SIZE_Z_IN,
+    x: ((xIndex + 0.5) / scaler.gridX) * scaler.sizeX,
+    y: ((yIndex + 0.5) / scaler.gridY) * scaler.sizeY,
+    z: ((zIndex + 0.5) / scaler.gridZ) * scaler.sizeZ,
   };
 };
 

@@ -6,9 +6,7 @@
 #include <stdint.h>
 
 enum {
-  SIZE_X_IN = 10,
-  SIZE_Y_IN = 10,
-  SIZE_Z_IN = 4,
+  LONGEST_EDGE_IN = 5,
   DPI_X = 300,
   DPI_Y = 300,
   DPI_Z = 300,
@@ -84,6 +82,9 @@ typedef struct {
   double range_x;
   double range_y;
   double range_z;
+  double size_x;
+  double size_y;
+  double size_z;
   uint64_t grid_x_u64;
   uint64_t grid_y_u64;
 } Scaler;

@@ -373,7 +373,7 @@ What [`quantize/quantize.c`](./quantize/quantize.c) does:
 - reads the input PLY header
 - supports ASCII and binary little-endian vertex streams
 - scans the full file once to determine bounds
-- maps points into a fixed 3D grid derived from the hard-coded physical target size and DPI
+- maps points into a 3D grid derived from a hard-coded `5"` longest edge and per-axis DPI
 - shards quantized cells across temporary binary files
 - reduces each shard to one output vertex per occupied cell
 - writes a binary little-endian PLY with RGBA color
@@ -389,7 +389,7 @@ Important behaviors:
 - if `--temp-dir` is omitted, the binary creates a fresh retained temp directory under the current working directory
 - retained shard files are plain text records with `cell_id x y z r g b a packed_color`
 - if the input contains no usable numeric vertices, the script writes an empty PLY
-- output coordinates are written in the normalized target-space dimensions, not the original source-space bounds
+- output coordinates are written in target-space dimensions that preserve the source aspect ratio, with the longest edge scaled to `5"`
 - reduce writes one retained binary staging file per shard as `reduced-000.bin` through `reduced-127.bin`
 - existing shard cache files remain the same retained plain-text records, so `--steps reduce` can reuse a previously generated cache without rerunning sharding
 - progress bars were removed; the native binary prints per-stage timings and the same overall timing summary instead

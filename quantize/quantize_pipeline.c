@@ -99,11 +99,47 @@ static void init_bounds(Bounds *bounds) {
   bounds->max_z = -INFINITY;
 }
 
-static Grid build_default_grid(void) {
+static double scale_dimension_to_longest_edge(double range, double longest_range) {
+  if (longest_range <= 0.0) {
+    return (double)LONGEST_EDGE_IN;
+  }
+  if (range <= 0.0) {
+    return 0.0;
+  }
+  return ((double)LONGEST_EDGE_IN * range) / longest_range;
+}
+
+static uint32_t dimension_to_steps(double size_in, int dpi) {
+  long long steps = llround(size_in * (double)dpi);
+  if (steps < 1) {
+    return 1;
+  }
+  if ((unsigned long long)steps > UINT32_MAX) {
+    return UINT32_MAX;
+  }
+  return (uint32_t)steps;
+}
+
+static Grid build_grid_from_bounds(const Bounds *bounds, double *size_x, double *size_y, double *size_z) {
+  double range_x = bounds->max_x - bounds->min_x;
+  double range_y = bounds->max_y - bounds->min_y;
+  double range_z = bounds->max_z - bounds->min_z;
+  double longest_range = range_x;
+  if (range_y > longest_range) {
+    longest_range = range_y;
+  }
+  if (range_z > longest_range) {
+    longest_range = range_z;
+  }
+
+  *size_x = scale_dimension_to_longest_edge(range_x, longest_range);
+  *size_y = scale_dimension_to_longest_edge(range_y, longest_range);
+  *size_z = scale_dimension_to_longest_edge(range_z, longest_range);
+
   Grid grid = {
-      .x = (uint32_t)((SIZE_X_IN * DPI_X) > 0 ? (SIZE_X_IN * DPI_X) : 1),
-      .y = (uint32_t)((SIZE_Y_IN * DPI_Y) > 0 ? (SIZE_Y_IN * DPI_Y) : 1),
-      .z = (uint32_t)((SIZE_Z_IN * DPI_Z) > 0 ? (SIZE_Z_IN * DPI_Z) : 1),
+      .x = dimension_to_steps(*size_x, DPI_X),
+      .y = dimension_to_steps(*size_y, DPI_Y),
+      .z = dimension_to_steps(*size_z, DPI_Z),
   };
   return grid;
 }
@@ -125,6 +161,9 @@ static Scaler build_scaler(const Bounds *bounds, Grid grid) {
   scaler.range_x = bounds->max_x - bounds->min_x;
   scaler.range_y = bounds->max_y - bounds->min_y;
   scaler.range_z = bounds->max_z - bounds->min_z;
+  scaler.size_x = grid.x > 0 ? (double)grid.x / (double)DPI_X : 0.0;
+  scaler.size_y = grid.y > 0 ? (double)grid.y / (double)DPI_Y : 0.0;
+  scaler.size_z = grid.z > 0 ? (double)grid.z / (double)DPI_Z : 0.0;
   return scaler;
 }
 
@@ -154,9 +193,9 @@ static void decode_cell_center(const Scaler *scaler, uint64_t cell_id, float *x,
   uint64_t y_index = yz % scaler->grid_y_u64;
   uint64_t z_index = yz / scaler->grid_y_u64;
 
-  *x = (float)(((double)x_index + 0.5) / (double)scaler->grid.x * (double)SIZE_X_IN);
-  *y = (float)(((double)y_index + 0.5) / (double)scaler->grid.y * (double)SIZE_Y_IN);
-  *z = (float)(((double)z_index + 0.5) / (double)scaler->grid.z * (double)SIZE_Z_IN);
+  *x = (float)(((double)x_index + 0.5) / (double)scaler->grid.x * scaler->size_x);
+  *y = (float)(((double)y_index + 0.5) / (double)scaler->grid.y * scaler->size_y);
+  *z = (float)(((double)z_index + 0.5) / (double)scaler->grid.z * scaler->size_z);
 }
 
 static uint32_t pack_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -1106,6 +1145,19 @@ static int scan_bounds(QuantizeRun *run) {
   return 0;
 }
 
+static void build_scaler_from_bounds(QuantizeRun *run) {
+  double size_x;
+  double size_y;
+  double size_z;
+  Grid grid;
+
+  grid = build_grid_from_bounds(&run->bounds, &size_x, &size_y, &size_z);
+  run->scaler = build_scaler(&run->bounds, grid);
+  run->scaler.size_x = size_x;
+  run->scaler.size_y = size_y;
+  run->scaler.size_z = size_z;
+}
+
 static int prepare_resume_from_shard(QuantizeRun *run) {
   if (scan_bounds(run) != 0) {
     return -1;
@@ -1114,8 +1166,7 @@ static int prepare_resume_from_shard(QuantizeRun *run) {
     fprintf(stderr, "Input had no valid numeric vertices to quantize.\n");
     return -1;
   }
-
-  run->scaler = build_scaler(&run->bounds, build_default_grid());
+  build_scaler_from_bounds(run);
   if (init_temp_paths_with_base(&run->temp_paths, run->options.temp_dir_path) != 0) {
     return -1;
   }
@@ -1275,7 +1326,12 @@ static void print_success_summary(const QuantizeRun *run) {
       "Quantized %" PRIu64 " input points into %" PRIu64 " output points.\n",
       actual_input_point_count(run),
       run->output_point_count);
-  printf("Target size: %d\" x %d\" x %d\"\n", SIZE_X_IN, SIZE_Y_IN, SIZE_Z_IN);
+  printf(
+      "Target size: %.6g\" x %.6g\" x %.6g\" (longest edge %d\")\n",
+      run->scaler.size_x,
+      run->scaler.size_y,
+      run->scaler.size_z,
+      LONGEST_EDGE_IN);
   printf("Target DPI: %d x %d x %d\n", DPI_X, DPI_Y, DPI_Z);
 
   if (run->options.start_stage == QUANTIZE_START_BOUNDS) {
@@ -1329,8 +1385,7 @@ int run_quantize(const QuantizeOptions *options) {
           false);
       goto cleanup;
     }
-
-    run.scaler = build_scaler(&run.bounds, build_default_grid());
+    build_scaler_from_bounds(&run);
     if ((run.options.temp_dir_path != NULL
              ? init_temp_paths_with_base(&run.temp_paths, run.options.temp_dir_path)
              : init_temp_paths(&run.temp_paths)) != 0) {
@@ -1341,7 +1396,14 @@ int run_quantize(const QuantizeOptions *options) {
       goto cleanup;
     }
   } else if (should_resume_existing_temp_files(&run)) {
-    run.scaler = build_grid_scaler(build_default_grid());
+    if (scan_bounds(&run) != 0) {
+      goto cleanup;
+    }
+    if (!bounds_are_valid(&run.bounds)) {
+      fprintf(stderr, "Input had no valid numeric vertices to quantize.\n");
+      goto cleanup;
+    }
+    build_scaler_from_bounds(&run);
     if (init_existing_temp_paths(&run.temp_paths, run.options.temp_dir_path) != 0) {
       goto cleanup;
     }
