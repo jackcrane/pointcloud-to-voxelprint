@@ -22,6 +22,21 @@ char *dup_string(const std::string &value) {
   return copy;
 }
 
+char *dup_path(const std::string &value) {
+  if (value == "~" || value.rfind("~/", 0) == 0) {
+    const char *home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+      return nullptr;
+    }
+
+    const std::string expanded =
+        value == "~" ? std::string(home) : std::string(home) + value.substr(1);
+    return dup_string(expanded);
+  }
+
+  return dup_string(value);
+}
+
 bool parse_color_component(const cpptoml::base &value, uint8_t *out) {
   if (const auto *as_int = dynamic_cast<const cpptoml::value<int64_t> *>(&value)) {
     if (as_int->get() < 0 || as_int->get() > 255) {
@@ -109,17 +124,19 @@ extern "C" int load_fill_region_config_file(const char *path, FillRegionOptions 
     const auto input = config->get_table("input");
     const auto output = config->get_table("output");
     const auto layer = config->get_table("layer");
-    const auto color = output != nullptr ? output->get_array("color") : config->get_array("color");
+    const auto color =
+        output != nullptr && output->contains("color") ? output->get_array("color")
+                                                       : config->get_array("color");
     const auto point_tables = config->get_table_array("points");
 
     if (input != nullptr) {
       if (auto value = input->get_as<std::string>("directory")) {
-        parsed.input_dir = dup_string(*value);
+        parsed.input_dir = dup_path(*value);
       }
     }
     if (output != nullptr) {
       if (auto value = output->get_as<std::string>("directory")) {
-        parsed.output_dir = dup_string(*value);
+        parsed.output_dir = dup_path(*value);
       }
     }
 

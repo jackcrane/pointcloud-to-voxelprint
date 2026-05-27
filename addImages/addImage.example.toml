@@ -1,0 +1,26 @@
+[input]
+# Directory containing out_<layer>.png files.
+directory = "/root/voxel/ozark_slices/wb_vaw_hb"
+
+[output]
+# Directory where the processed PNG stack will be written.
+directory = "/root/voxel/ozark_slices/wb_vaw_hbi"
+
+# Optional inclusive layer range. Layers outside this range are copied through unchanged.
+[layer]
+first = 0
+last = 65
+
+# Images
+[[image]]
+src = "/root/voxel/asdfasdf78ahaisd.png"
+x = 363
+y = 935
+height = 40
+
+[[image]]
+src = "/root/voxel/swwwwww6jtgsrg.png"
+x = 2
+y = 58
+width = 180
+invert = true # Mirror on the vertical axis.

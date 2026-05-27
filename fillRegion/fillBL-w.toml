@@ -1,18 +1,18 @@
 [input]
 # Directory containing out_<layer>.png files.
-directory = "~/voxel/ozark_slices/wb_vaw_hb"
+directory = "~/voxel/ozark_slices/wb_vaw_hb_l_p"
 
 [output]
 # Directory where the processed PNG stack will be written.
-directory = "~/voxel/ozark_slices/wb_vaw_hb_l"
+directory = "~/voxel/ozark_slices/wb_vaw_hb_lw_p"
 
 # Fill color as [r, g, b] or [r, g, b, a].
-color = [100, 122, 130]
+color = [255, 255, 255]
 
 # Optional inclusive layer range. Layers outside this range are copied through unchanged.
 [layer]
 first = 0
-last = 65
+last = 80
 
 # XY mode:
 # Omit z to fill the same polygon on every layer.

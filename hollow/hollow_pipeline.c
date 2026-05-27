@@ -8,8 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 typedef struct {
   uint32_t width;
@@ -25,6 +27,14 @@ typedef struct {
 } LayerFile;
 
 typedef struct {
+  uint8_t *bytes;
+  size_t bit_count;
+  size_t byte_count;
+  int fd;
+} VoxelBitset;
+
+typedef struct {
+  const char *stage;
   uint64_t interval;
   uint64_t next_tick;
   uint64_t completed;
@@ -49,15 +59,26 @@ static size_t voxel_index(
     uint32_t x,
     uint32_t width,
     uint32_t height);
+static size_t bitset_byte_count(size_t bit_count);
+static int init_bitset(
+    VoxelBitset *bitset,
+    size_t bit_count,
+    const char *cache_dir,
+    const char *tag,
+    const char *label);
+static void free_bitset(VoxelBitset *bitset);
+static bool bitset_get(const VoxelBitset *bitset, size_t index);
+static void bitset_set(VoxelBitset *bitset, size_t index);
 static void progress_begin(ProgressTracker *tracker, uint64_t interval, uint64_t total);
+static void progress_set_stage(ProgressTracker *tracker, const char *stage);
 static void progress_advance(ProgressTracker *tracker, uint64_t amount);
 static void progress_finish(ProgressTracker *tracker);
 static double elapsed_seconds_since(const struct timespec *start_time);
 static void format_duration(double seconds, char *buffer, size_t buffer_size);
 static void log_progress(const ProgressTracker *tracker);
 static void run_positive_x_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -65,8 +86,8 @@ static void run_positive_x_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_negative_x_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -74,8 +95,8 @@ static void run_negative_x_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_positive_y_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -83,8 +104,8 @@ static void run_positive_y_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_negative_y_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -92,8 +113,8 @@ static void run_negative_y_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_positive_z_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -101,8 +122,8 @@ static void run_positive_z_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_negative_z_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -113,15 +134,15 @@ static bool diagonal_pass_enabled(uint32_t distance_a, uint32_t distance_b);
 static uint64_t diagonal_threshold_sq(uint32_t distance_a, uint32_t distance_b);
 static bool diagonal_step_within_threshold(size_t step_count, uint64_t threshold_sq);
 static void process_diagonal_line(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     const size_t *line_indices,
     size_t line_length,
     uint64_t threshold_sq,
     bool treat_edges_as_blockers);
 static void run_xy_diagonal_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -132,8 +153,8 @@ static void run_xy_diagonal_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_xz_diagonal_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -144,8 +165,8 @@ static void run_xz_diagonal_pass(
     bool treat_edges_as_blockers,
     ProgressTracker *progress);
 static void run_yz_diagonal_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -174,9 +195,8 @@ static int write_png(const char *path, const Image *image);
 
 int run_hollow(const HollowOptions *options) {
   LayerFile *layers = NULL;
-  Image *images = NULL;
-  uint8_t *removable_map = NULL;
-  uint8_t *keep_map = NULL;
+  VoxelBitset removable_map;
+  VoxelBitset keep_map;
   size_t layer_count = 0;
   uint32_t width = 0;
   uint32_t height = 0;
@@ -185,6 +205,10 @@ int run_hollow(const HollowOptions *options) {
   uint64_t active_pass_count = 0;
   ProgressTracker progress;
   memset(&progress, 0, sizeof(progress));
+  memset(&removable_map, 0, sizeof(removable_map));
+  memset(&keep_map, 0, sizeof(keep_map));
+  removable_map.fd = -1;
+  keep_map.fd = -1;
 
   if (options == NULL) {
     fprintf(stderr, "Missing hollow options.\n");
@@ -204,50 +228,41 @@ int run_hollow(const HollowOptions *options) {
     return -1;
   }
 
-  images = calloc(layer_count, sizeof(*images));
-  if (images == NULL) {
-    fprintf(stderr, "Failed to allocate image table.\n");
-    free_layer_files(layers, layer_count);
-    return -1;
-  }
-
+  printf("Checking %zu input layers...\n", layer_count);
+  fflush(stdout);
   for (size_t i = 0; i < layer_count; ++i) {
-    if (read_png(layers[i].path, &images[i]) != 0) {
-      for (size_t j = 0; j < i; ++j) {
-        free_image(&images[j]);
-      }
-      free(images);
+    Image image;
+    memset(&image, 0, sizeof(image));
+    if (read_png(layers[i].path, &image) != 0) {
       free_layer_files(layers, layer_count);
       return -1;
     }
 
     if (i == 0u) {
-      width = images[i].width;
-      height = images[i].height;
-    } else if (images[i].width != width || images[i].height != height) {
+      width = image.width;
+      height = image.height;
+    } else if (image.width != width || image.height != height) {
       fprintf(
           stderr,
           "Layer dimensions do not match. Expected %ux%u but %s is %ux%u.\n",
           width,
           height,
           layers[i].name,
-          images[i].width,
-          images[i].height);
-      for (size_t j = 0; j <= i; ++j) {
-        free_image(&images[j]);
-      }
-      free(images);
+          image.width,
+          image.height);
+      free_image(&image);
       free_layer_files(layers, layer_count);
       return -1;
+    }
+    free_image(&image);
+    if ((i + 1u) == layer_count || (i + 1u) % 100u == 0u) {
+      printf("Checked %zu/%zu input layers\n", i + 1u, layer_count);
+      fflush(stdout);
     }
   }
 
   if (width == 0u || height == 0u) {
     fprintf(stderr, "Input layers must not be empty.\n");
-    for (size_t i = 0; i < layer_count; ++i) {
-      free_image(&images[i]);
-    }
-    free(images);
     free_layer_files(layers, layer_count);
     return -1;
   }
@@ -255,25 +270,23 @@ int run_hollow(const HollowOptions *options) {
   if ((size_t) width > SIZE_MAX / (size_t) height ||
       (size_t) width * (size_t) height > SIZE_MAX / layer_count) {
     fprintf(stderr, "Voxel stack is too large to index in memory.\n");
-    for (size_t i = 0; i < layer_count; ++i) {
-      free_image(&images[i]);
-    }
-    free(images);
     free_layer_files(layers, layer_count);
     return -1;
   }
   total_voxels = layer_count * (size_t) width * (size_t) height;
 
-  removable_map = calloc(total_voxels, sizeof(*removable_map));
-  keep_map = calloc(total_voxels, sizeof(*keep_map));
-  if (removable_map == NULL || keep_map == NULL) {
-    fprintf(stderr, "Failed to allocate hollow voxel maps.\n");
-    free(removable_map);
-    free(keep_map);
-    for (size_t i = 0; i < layer_count; ++i) {
-      free_image(&images[i]);
-    }
-    free(images);
+  if (init_bitset(&removable_map,
+                  total_voxels,
+                  options->output_dir,
+                  "removable",
+                  "removable voxel map") != 0 ||
+      init_bitset(&keep_map,
+                  total_voxels,
+                  options->output_dir,
+                  "keep",
+                  "keep voxel map") != 0) {
+    free_bitset(&removable_map);
+    free_bitset(&keep_map);
     free_layer_files(layers, layer_count);
     return -1;
   }
@@ -300,28 +313,44 @@ int run_hollow(const HollowOptions *options) {
   progress_begin(&progress, options->log_interval, total_progress_units);
 
   printf(
-      "hollow: %s -> %s (%zu layers, %ux%u)\n",
+      "hollow: %s -> %s (%zu layers, %ux%u, %zu voxels, %.2f MiB disk-backed maps)\n",
       options->input_dir,
       options->output_dir,
       layer_count,
       width,
-      height);
+      height,
+      total_voxels,
+      ((double) (bitset_byte_count(total_voxels) * 2u)) / (1024.0 * 1024.0));
   fflush(stdout);
 
+  progress_set_stage(&progress, "Classify removable voxels");
   for (size_t layer = 0; layer < layer_count; ++layer) {
+    Image image;
+    memset(&image, 0, sizeof(image));
+    if (read_png(layers[layer].path, &image) != 0) {
+      free_bitset(&keep_map);
+      free_bitset(&removable_map);
+      free_layer_files(layers, layer_count);
+      return -1;
+    }
+
     for (uint32_t y = 0; y < height; ++y) {
       for (uint32_t x = 0; x < width; ++x) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        const uint8_t *pixel = images[layer].pixels + (size_t) y * images[layer].stride + x * 4u;
-        removable_map[index] = color_is_removable(pixel, options) ? 1u : 0u;
+        const uint8_t *pixel = image.pixels + (size_t) y * image.stride + x * 4u;
+        if (color_is_removable(pixel, options)) {
+          bitset_set(&removable_map, index);
+        }
       }
       progress_advance(&progress, width);
     }
+    free_image(&image);
   }
 
   if (options->dist_positive_x > 0u) {
-    run_positive_x_pass(removable_map,
-                        keep_map,
+    progress_set_stage(&progress, "Pass +X");
+    run_positive_x_pass(&removable_map,
+                        &keep_map,
                         layer_count,
                         width,
                         height,
@@ -330,8 +359,9 @@ int run_hollow(const HollowOptions *options) {
                         &progress);
   }
   if (options->dist_negative_x > 0u) {
-    run_negative_x_pass(removable_map,
-                        keep_map,
+    progress_set_stage(&progress, "Pass -X");
+    run_negative_x_pass(&removable_map,
+                        &keep_map,
                         layer_count,
                         width,
                         height,
@@ -340,8 +370,9 @@ int run_hollow(const HollowOptions *options) {
                         &progress);
   }
   if (options->dist_positive_y > 0u) {
-    run_positive_y_pass(removable_map,
-                        keep_map,
+    progress_set_stage(&progress, "Pass +Y");
+    run_positive_y_pass(&removable_map,
+                        &keep_map,
                         layer_count,
                         width,
                         height,
@@ -350,8 +381,9 @@ int run_hollow(const HollowOptions *options) {
                         &progress);
   }
   if (options->dist_negative_y > 0u) {
-    run_negative_y_pass(removable_map,
-                        keep_map,
+    progress_set_stage(&progress, "Pass -Y");
+    run_negative_y_pass(&removable_map,
+                        &keep_map,
                         layer_count,
                         width,
                         height,
@@ -360,8 +392,9 @@ int run_hollow(const HollowOptions *options) {
                         &progress);
   }
   if (options->dist_positive_z > 0u) {
-    run_positive_z_pass(removable_map,
-                        keep_map,
+    progress_set_stage(&progress, "Pass +Z");
+    run_positive_z_pass(&removable_map,
+                        &keep_map,
                         layer_count,
                         width,
                         height,
@@ -370,8 +403,9 @@ int run_hollow(const HollowOptions *options) {
                         &progress);
   }
   if (options->dist_negative_z > 0u) {
-    run_negative_z_pass(removable_map,
-                        keep_map,
+    progress_set_stage(&progress, "Pass -Z");
+    run_negative_z_pass(&removable_map,
+                        &keep_map,
                         layer_count,
                         width,
                         height,
@@ -380,8 +414,9 @@ int run_hollow(const HollowOptions *options) {
                         &progress);
   }
   if (diagonal_pass_enabled(options->dist_positive_x, options->dist_positive_y)) {
-    run_xy_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass +X/+Y diagonal");
+    run_xy_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -393,8 +428,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_negative_x, options->dist_negative_y)) {
-    run_xy_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass -X/-Y diagonal");
+    run_xy_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -406,8 +442,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_positive_x, options->dist_negative_y)) {
-    run_xy_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass +X/-Y diagonal");
+    run_xy_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -419,8 +456,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_negative_x, options->dist_positive_y)) {
-    run_xy_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass -X/+Y diagonal");
+    run_xy_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -432,8 +470,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_positive_x, options->dist_positive_z)) {
-    run_xz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass +X/+Z diagonal");
+    run_xz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -445,8 +484,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_negative_x, options->dist_negative_z)) {
-    run_xz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass -X/-Z diagonal");
+    run_xz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -458,8 +498,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_positive_x, options->dist_negative_z)) {
-    run_xz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass +X/-Z diagonal");
+    run_xz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -471,8 +512,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_negative_x, options->dist_positive_z)) {
-    run_xz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass -X/+Z diagonal");
+    run_xz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -484,8 +526,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_positive_y, options->dist_positive_z)) {
-    run_yz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass +Y/+Z diagonal");
+    run_yz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -497,8 +540,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_negative_y, options->dist_negative_z)) {
-    run_yz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass -Y/-Z diagonal");
+    run_yz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -510,8 +554,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_negative_y, options->dist_positive_z)) {
-    run_yz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass -Y/+Z diagonal");
+    run_yz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -523,8 +568,9 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
   if (diagonal_pass_enabled(options->dist_positive_y, options->dist_negative_z)) {
-    run_yz_diagonal_pass(removable_map,
-                         keep_map,
+    progress_set_stage(&progress, "Pass +Y/-Z diagonal");
+    run_yz_diagonal_pass(&removable_map,
+                         &keep_map,
                          layer_count,
                          width,
                          height,
@@ -536,56 +582,55 @@ int run_hollow(const HollowOptions *options) {
                          &progress);
   }
 
+  progress_set_stage(&progress, "Rewrite output layers");
   for (size_t layer = 0; layer < layer_count; ++layer) {
+    Image image;
+    char *output_path = NULL;
+    memset(&image, 0, sizeof(image));
+    if (read_png(layers[layer].path, &image) != 0) {
+      free_bitset(&keep_map);
+      free_bitset(&removable_map);
+      free_layer_files(layers, layer_count);
+      return -1;
+    }
+
     for (uint32_t y = 0; y < height; ++y) {
       for (uint32_t x = 0; x < width; ++x) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] != 0u && keep_map[index] == 0u) {
-          uint8_t *pixel = images[layer].pixels + (size_t) y * images[layer].stride + x * 4u;
+        if (bitset_get(&removable_map, index) && !bitset_get(&keep_map, index)) {
+          uint8_t *pixel = image.pixels + (size_t) y * image.stride + x * 4u;
           set_pixel(pixel, &options->destination_color);
         }
       }
       progress_advance(&progress, width);
     }
-  }
 
-  for (size_t layer = 0; layer < layer_count; ++layer) {
-    char *output_path = NULL;
     if (build_output_path(options->output_dir, layers[layer].name, &output_path) != 0) {
-      free(keep_map);
-      free(removable_map);
-      for (size_t i = 0; i < layer_count; ++i) {
-        free_image(&images[i]);
-      }
-      free(images);
+      free_image(&image);
+      free_bitset(&keep_map);
+      free_bitset(&removable_map);
       free_layer_files(layers, layer_count);
       return -1;
     }
 
-    if (write_png(output_path, &images[layer]) != 0) {
+    if (write_png(output_path, &image) != 0) {
       free(output_path);
-      free(keep_map);
-      free(removable_map);
-      for (size_t i = 0; i < layer_count; ++i) {
-        free_image(&images[i]);
-      }
-      free(images);
+      free_image(&image);
+      free_bitset(&keep_map);
+      free_bitset(&removable_map);
       free_layer_files(layers, layer_count);
       return -1;
     }
 
     free(output_path);
+    free_image(&image);
     progress_advance(&progress, (uint64_t) width * (uint64_t) height);
   }
 
   progress_finish(&progress);
 
-  free(keep_map);
-  free(removable_map);
-  for (size_t i = 0; i < layer_count; ++i) {
-    free_image(&images[i]);
-  }
-  free(images);
+  free_bitset(&keep_map);
+  free_bitset(&removable_map);
   free_layer_files(layers, layer_count);
   return 0;
 }
@@ -787,12 +832,107 @@ static size_t voxel_index(
   return layer * (size_t) width * (size_t) height + (size_t) y * (size_t) width + (size_t) x;
 }
 
+static size_t bitset_byte_count(size_t bit_count) {
+  return (bit_count + 7u) / 8u;
+}
+
+static int init_bitset(
+    VoxelBitset *bitset,
+    size_t bit_count,
+    const char *cache_dir,
+    const char *tag,
+    const char *label) {
+  const size_t byte_count = bitset_byte_count(bit_count);
+  const size_t mapped_size = byte_count == 0u ? 1u : byte_count;
+  const size_t path_length = strlen(cache_dir) + strlen(tag) + 32u;
+  memset(bitset, 0, sizeof(*bitset));
+  bitset->fd = -1;
+  char *path = malloc(path_length);
+  if (path == NULL) {
+    fprintf(stderr, "Failed to allocate %s cache path.\n", label);
+    return -1;
+  }
+
+  snprintf(path, path_length, "%s/.hollow-%s-XXXXXX", cache_dir, tag);
+  const int fd = mkstemp(path);
+  if (fd < 0) {
+    fprintf(stderr, "Failed to create %s cache in %s: %s\n", label, cache_dir, strerror(errno));
+    free(path);
+    return -1;
+  }
+
+  if (ftruncate(fd, (off_t) mapped_size) != 0) {
+    fprintf(stderr, "Failed to size %s cache: %s\n", label, strerror(errno));
+    close(fd);
+    unlink(path);
+    free(path);
+    return -1;
+  }
+
+  void *mapped = mmap(NULL, mapped_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (mapped == MAP_FAILED) {
+    fprintf(stderr, "Failed to map %s cache: %s\n", label, strerror(errno));
+    close(fd);
+    unlink(path);
+    free(path);
+    return -1;
+  }
+
+  if (unlink(path) != 0) {
+    fprintf(stderr, "Warning: failed to unlink %s cache %s: %s\n", label, path, strerror(errno));
+  }
+  free(path);
+
+  bitset->bytes = mapped;
+  bitset->bit_count = bit_count;
+  bitset->byte_count = mapped_size;
+  bitset->fd = fd;
+  return 0;
+}
+
+static void free_bitset(VoxelBitset *bitset) {
+  if (bitset == NULL) {
+    return;
+  }
+  if (bitset->bytes != NULL && bitset->byte_count > 0u) {
+    munmap(bitset->bytes, bitset->byte_count);
+  }
+  if (bitset->fd >= 0) {
+    close(bitset->fd);
+  }
+  memset(bitset, 0, sizeof(*bitset));
+  bitset->fd = -1;
+}
+
+static bool bitset_get(const VoxelBitset *bitset, size_t index) {
+  return index < bitset->bit_count &&
+         (bitset->bytes[index / 8u] & (uint8_t) (1u << (index % 8u))) != 0u;
+}
+
+static void bitset_set(VoxelBitset *bitset, size_t index) {
+  if (index < bitset->bit_count) {
+    bitset->bytes[index / 8u] |= (uint8_t) (1u << (index % 8u));
+  }
+}
+
 static void progress_begin(ProgressTracker *tracker, uint64_t interval, uint64_t total) {
+  tracker->stage = NULL;
   tracker->interval = interval;
   tracker->next_tick = interval;
   tracker->completed = 0u;
   tracker->total = total;
   clock_gettime(CLOCK_MONOTONIC, &tracker->start_time);
+}
+
+static void progress_set_stage(ProgressTracker *tracker, const char *stage) {
+  if (tracker == NULL) {
+    return;
+  }
+  tracker->stage = stage;
+  if (stage != NULL && tracker->interval != 0u) {
+    printf("stage: %s\n", stage);
+    fflush(stdout);
+  }
 }
 
 static void progress_advance(ProgressTracker *tracker, uint64_t amount) {
@@ -809,9 +949,15 @@ static void progress_advance(ProgressTracker *tracker, uint64_t amount) {
     return;
   }
 
-  while (tracker->completed >= tracker->next_tick && tracker->next_tick <= tracker->total) {
+  if (tracker->completed >= tracker->next_tick && tracker->next_tick <= tracker->total) {
     log_progress(tracker);
-    tracker->next_tick += tracker->interval;
+    while (tracker->completed >= tracker->next_tick && tracker->next_tick <= tracker->total) {
+      if (UINT64_MAX - tracker->next_tick < tracker->interval) {
+        tracker->next_tick = UINT64_MAX;
+        break;
+      }
+      tracker->next_tick += tracker->interval;
+    }
   }
 }
 
@@ -820,12 +966,18 @@ static void progress_finish(ProgressTracker *tracker) {
     return;
   }
 
-  if (tracker->completed == tracker->total && tracker->next_tick > tracker->total) {
-    return;
-  }
-
   tracker->completed = tracker->total;
   log_progress(tracker);
+  if (tracker->interval == 0u) {
+    return;
+  }
+  while (tracker->next_tick <= tracker->total) {
+    if (UINT64_MAX - tracker->next_tick < tracker->interval) {
+      tracker->next_tick = UINT64_MAX;
+      break;
+    }
+    tracker->next_tick += tracker->interval;
+  }
 }
 
 static double elapsed_seconds_since(const struct timespec *start_time) {
@@ -866,7 +1018,9 @@ static void log_progress(const ProgressTracker *tracker) {
   format_duration(elapsed, elapsed_text, sizeof(elapsed_text));
   format_duration(remaining, remaining_text, sizeof(remaining_text));
   printf(
-      "progress: %.2f%% (%" PRIu64 "/%" PRIu64 "), elapsed %s, remaining %s\n",
+      "%s%sprogress: %.2f%% (%" PRIu64 "/%" PRIu64 "), elapsed %s, remaining %s\n",
+      tracker->stage == NULL ? "" : tracker->stage,
+      tracker->stage == NULL ? "" : " ",
       percent,
       tracker->completed,
       tracker->total,
@@ -876,8 +1030,8 @@ static void log_progress(const ProgressTracker *tracker) {
 }
 
 static void run_positive_x_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -889,12 +1043,12 @@ static void run_positive_x_pass(
       uint32_t next_blocker = treat_edges_as_blockers ? width : UINT32_MAX;
       for (uint32_t x = width; x-- > 0u;) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] == 0u) {
+        if (!bitset_get(removable_map, index)) {
           next_blocker = x;
           continue;
         }
         if (next_blocker != UINT32_MAX && next_blocker - x <= threshold) {
-          keep_map[index] = 1u;
+          bitset_set(keep_map, index);
         }
       }
       progress_advance(progress, width);
@@ -903,8 +1057,8 @@ static void run_positive_x_pass(
 }
 
 static void run_negative_x_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -916,13 +1070,13 @@ static void run_negative_x_pass(
       int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
       for (uint32_t x = 0; x < width; ++x) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] == 0u) {
+        if (!bitset_get(removable_map, index)) {
           previous_blocker = (int64_t) x;
           continue;
         }
         if (previous_blocker != INT64_MIN &&
             (uint64_t) ((int64_t) x - previous_blocker) <= threshold) {
-          keep_map[index] = 1u;
+          bitset_set(keep_map, index);
         }
       }
       progress_advance(progress, width);
@@ -931,8 +1085,8 @@ static void run_negative_x_pass(
 }
 
 static void run_positive_y_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -944,12 +1098,12 @@ static void run_positive_y_pass(
       uint32_t next_blocker = treat_edges_as_blockers ? height : UINT32_MAX;
       for (uint32_t y = height; y-- > 0u;) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] == 0u) {
+        if (!bitset_get(removable_map, index)) {
           next_blocker = y;
           continue;
         }
         if (next_blocker != UINT32_MAX && next_blocker - y <= threshold) {
-          keep_map[index] = 1u;
+          bitset_set(keep_map, index);
         }
       }
       progress_advance(progress, height);
@@ -958,8 +1112,8 @@ static void run_positive_y_pass(
 }
 
 static void run_negative_y_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -971,13 +1125,13 @@ static void run_negative_y_pass(
       int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
       for (uint32_t y = 0; y < height; ++y) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] == 0u) {
+        if (!bitset_get(removable_map, index)) {
           previous_blocker = (int64_t) y;
           continue;
         }
         if (previous_blocker != INT64_MIN &&
             (uint64_t) ((int64_t) y - previous_blocker) <= threshold) {
-          keep_map[index] = 1u;
+          bitset_set(keep_map, index);
         }
       }
       progress_advance(progress, height);
@@ -986,8 +1140,8 @@ static void run_negative_y_pass(
 }
 
 static void run_positive_z_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -999,12 +1153,12 @@ static void run_positive_z_pass(
       size_t next_blocker = treat_edges_as_blockers ? layer_count : SIZE_MAX;
       for (size_t layer = layer_count; layer-- > 0u;) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] == 0u) {
+        if (!bitset_get(removable_map, index)) {
           next_blocker = layer;
           continue;
         }
         if (next_blocker != SIZE_MAX && next_blocker - layer <= threshold) {
-          keep_map[index] = 1u;
+          bitset_set(keep_map, index);
         }
       }
       progress_advance(progress, (uint64_t) layer_count);
@@ -1013,8 +1167,8 @@ static void run_positive_z_pass(
 }
 
 static void run_negative_z_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -1026,13 +1180,13 @@ static void run_negative_z_pass(
       int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
       for (size_t layer = 0; layer < layer_count; ++layer) {
         const size_t index = voxel_index(layer, y, x, width, height);
-        if (removable_map[index] == 0u) {
+        if (!bitset_get(removable_map, index)) {
           previous_blocker = (int64_t) layer;
           continue;
         }
         if (previous_blocker != INT64_MIN &&
             (uint64_t) ((int64_t) layer - previous_blocker) <= threshold) {
-          keep_map[index] = 1u;
+          bitset_set(keep_map, index);
         }
       }
       progress_advance(progress, (uint64_t) layer_count);
@@ -1055,8 +1209,8 @@ static bool diagonal_step_within_threshold(size_t step_count, uint64_t threshold
 }
 
 static void process_diagonal_line(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     const size_t *line_indices,
     size_t line_length,
     uint64_t threshold_sq,
@@ -1068,20 +1222,20 @@ static void process_diagonal_line(
   int64_t previous_blocker = treat_edges_as_blockers ? -1 : INT64_MIN;
   for (size_t pos = 0; pos < line_length; ++pos) {
     const size_t index = line_indices[pos];
-    if (removable_map[index] == 0u) {
+    if (!bitset_get(removable_map, index)) {
       previous_blocker = (int64_t) pos;
       continue;
     }
     if (previous_blocker != INT64_MIN &&
         diagonal_step_within_threshold((size_t) ((int64_t) pos - previous_blocker), threshold_sq)) {
-      keep_map[index] = 1u;
+      bitset_set(keep_map, index);
     }
   }
 }
 
 static void run_xy_diagonal_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -1164,8 +1318,8 @@ static void run_xy_diagonal_pass(
 }
 
 static void run_xz_diagonal_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,
@@ -1249,8 +1403,8 @@ static void run_xz_diagonal_pass(
 }
 
 static void run_yz_diagonal_pass(
-    const uint8_t *removable_map,
-    uint8_t *keep_map,
+    const VoxelBitset *removable_map,
+    VoxelBitset *keep_map,
     size_t layer_count,
     uint32_t width,
     uint32_t height,

@@ -23,6 +23,8 @@ SHADOW_DIR = shadow
 SHADOW_BIN = bin/shadow
 HOLLOW_DIR = hollow
 HOLLOW_BIN = bin/hollow
+ADD_IMAGES_DIR = addImages
+ADD_IMAGES_BIN = bin/addImages
 
 QUANTIZE_SRCS = \
 	$(QUANTIZE_DIR)/quantize.c \
@@ -160,7 +162,19 @@ HOLLOW_OBJS = \
 	$(HOLLOW_DIR)/hollow_pipeline.o \
 	$(HOLLOW_DIR)/hollow_toml.o
 
-.PHONY: quantize translate rotate crop slice xsection fillRegion shadow hollow clean
+ADD_IMAGES_HDRS = \
+	$(ADD_IMAGES_DIR)/addImages_cli.h \
+	$(ADD_IMAGES_DIR)/addImages_common.h \
+	$(ADD_IMAGES_DIR)/addImages_pipeline.h \
+	$(ADD_IMAGES_DIR)/addImages_toml.h
+
+ADD_IMAGES_OBJS = \
+	$(ADD_IMAGES_DIR)/addImages.o \
+	$(ADD_IMAGES_DIR)/addImages_cli.o \
+	$(ADD_IMAGES_DIR)/addImages_pipeline.o \
+	$(ADD_IMAGES_DIR)/addImages_toml.o
+
+.PHONY: quantize translate rotate crop slice xsection fillRegion shadow hollow addImages clean
 
 quantize: $(QUANTIZE_BIN)
 translate: $(TRANSLATE_BIN)
@@ -171,6 +185,7 @@ xsection: $(XSECTION_BIN)
 fillRegion: $(FILL_REGION_BIN)
 shadow: $(SHADOW_BIN)
 hollow: $(HOLLOW_BIN)
+addImages: $(ADD_IMAGES_BIN)
 
 $(QUANTIZE_BIN): $(QUANTIZE_SRCS) $(QUANTIZE_HDRS) | bin
 	$(CC) $(CFLAGS) -o $@ $(QUANTIZE_SRCS) $(LDFLAGS) $(LDLIBS)
@@ -198,6 +213,9 @@ $(SHADOW_BIN): $(SHADOW_OBJS) $(SHADOW_HDRS) | bin
 
 $(HOLLOW_BIN): $(HOLLOW_OBJS) $(HOLLOW_HDRS) | bin
 	$(CXX) $(CXXFLAGS) -o $@ $(HOLLOW_OBJS) $(LDFLAGS) $(LDLIBS)
+
+$(ADD_IMAGES_BIN): $(ADD_IMAGES_OBJS) $(ADD_IMAGES_HDRS) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $(ADD_IMAGES_OBJS) $(LDFLAGS) $(LDLIBS)
 
 $(SLICE_DIR)/slice.o: $(SLICE_DIR)/slice.c $(SLICE_HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -256,10 +274,23 @@ $(HOLLOW_DIR)/hollow_pipeline.o: $(HOLLOW_DIR)/hollow_pipeline.c $(HOLLOW_HDRS)
 $(HOLLOW_DIR)/hollow_toml.o: $(HOLLOW_DIR)/hollow_toml.cpp $(HOLLOW_HDRS)
 	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
 
+$(ADD_IMAGES_DIR)/addImages.o: $(ADD_IMAGES_DIR)/addImages.c $(ADD_IMAGES_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(ADD_IMAGES_DIR)/addImages_cli.o: $(ADD_IMAGES_DIR)/addImages_cli.c $(ADD_IMAGES_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(ADD_IMAGES_DIR)/addImages_pipeline.o: $(ADD_IMAGES_DIR)/addImages_pipeline.c $(ADD_IMAGES_HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(ADD_IMAGES_DIR)/addImages_toml.o: $(ADD_IMAGES_DIR)/addImages_toml.cpp $(ADD_IMAGES_HDRS)
+	$(CXX) $(CXXFLAGS) -include cstdlib -c -o $@ $<
+
 bin:
 	mkdir -p $@
 
 clean:
 	rm -f $(QUANTIZE_BIN) $(TRANSLATE_BIN) $(ROTATE_BIN) $(CROP_BIN) $(SLICE_BIN) $(XSECTION_BIN) $(FILL_REGION_BIN) $(SHADOW_BIN) *.o \
 		$(QUANTIZE_DIR)/*.o $(TRANSLATE_DIR)/*.o $(ROTATE_DIR)/*.o $(CROP_DIR)/*.o \
-		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o $(SHADOW_DIR)/*.o $(HOLLOW_DIR)/*.o $(HOLLOW_BIN)
+		$(ASCII_PLY_DIR)/*.o $(SLICE_DIR)/*.o $(FILL_REGION_DIR)/*.o $(SHADOW_DIR)/*.o $(HOLLOW_DIR)/*.o $(HOLLOW_BIN) \
+		$(ADD_IMAGES_DIR)/*.o $(ADD_IMAGES_BIN)

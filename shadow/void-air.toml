@@ -1,9 +1,10 @@
 from = "top"
 
 [input]
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom"
+directory = "/root/voxel/ozark_slices/wb_va"
 
 [output]
-directory = "/media/sf_Voxel_Ubuntu/ozark_slices_1/whitebottom-transvoid"
+directory = "/root/voxel/ozark_slices/wb_vaw"
 set_color = [0, 0, 0, 0]
-replace_color = [247, 247, 247, 128]
+# replace_color = [247, 247, 247, 128]
+replace_color = [255, 255, 255, 255]
